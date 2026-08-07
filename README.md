@@ -17,6 +17,49 @@ Three.js import map will not load over `file://`).
 
 Screenshots of what it looks like are in `screenshots/`.
 
+## Your first flight
+
+You start already airborne, trimmed and hands-off on final approach to the
+nearest field. Let go of everything and the aeroplane will fly straight and
+level on its own — nothing needs to be held.
+
+### Taking off
+
+Press **Enter** to be placed at the start of a runway, then:
+
+1. **Flaps 5** — press `]` twice. The `FLAP` readout on the PFD should show `5`.
+2. **Full thrust** — hold **Shift** for about three seconds until `N1` reaches
+   100 % and `THR` shows `100%`. You will start rolling immediately; the
+   parking brake is off.
+3. **Keep straight** — use `Q` and `E` for the nosewheel if you drift. You
+   shouldn't need much.
+4. **Rotate at 150 kt** — watch the speed tape on the left of the PFD. At 150,
+   pull back gently: hold **↓** (or `S`) until the nose is about **13° up** on
+   the pitch ladder, then ease off. Do not pull past ~18° or you'll lose speed.
+5. **Gear up** once you have a positive climb — press `G`. The `GEAR` readout
+   goes `DOWN` → `TRAN` → `UP`.
+6. **Flaps up** passing about 1000 ft — press `[` twice.
+7. Trim off any stick force with `,` and `.` so you can let go of the yoke.
+
+That is roughly a 40-second ground roll and a 3000 fpm initial climb. To level
+off, press `1` to engage the autopilot — it captures the heading, altitude and
+speed you are at, and you can then type new ones into the panel on the right.
+
+### If it won't accelerate
+
+Check the PFD: a red **PARK BRK** flag at the top right, or `BRAKES: PARK` in
+the bottom strip, means the parking brake is set. Press **V** to release it.
+The engines cannot overcome it.
+
+### Landing
+
+Press **Backspace** to be placed on a 9 NM final. Then: gear down (`G`), flaps
+30 (`]` until `FLAP` shows `30`), and aim for about **145 kt**. Hold roughly
+700 fpm down — the green circle on the PFD is your flight path vector; put it
+on the runway threshold and that is where you will touch down. Flare gently at
+about 30 ft, close the throttle, and after touchdown press **Space** for the
+speedbrakes, hold **R** for reverse thrust and **B** for the wheel brakes.
+
 ## The aircraft
 
 A 737-800 class twinjet, modelled with a full six-degree-of-freedom rigid body:
@@ -94,7 +137,7 @@ for the full list.
 | Rudder | `Q` / `E` |
 | Throttle | `Shift` / `Ctrl`, or the mouse wheel |
 | Flaps | `[` / `]` |
-| Gear · brakes · parking brake | `G` · `B` (hold) · `V` |
+| Gear · wheel brakes · parking brake | `G` · `B` (hold) · `V` (toggle) |
 | Speedbrake · reversers | `Space` · `R` (hold) |
 | Pitch trim | `,` / `.` |
 | Autopilot | `1` master · `2` HDG · `3` ALT · `4` SPD |

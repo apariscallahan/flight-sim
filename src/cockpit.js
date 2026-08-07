@@ -5,7 +5,9 @@ import { makeLitMaterial } from './litMaterial.js';
 const Z0 = -13.05;                 // eye station
 const WINDSHIELD = Z0 - 1.55;      // front glass plane
 const EYE_Y = 0.88;
-export const EYE = new THREE.Vector3(-0.40, EYE_Y, Z0);
+// Centred on the aircraft's axis rather than in the left seat, so the view is
+// symmetric and the runway centreline sits in the middle of the screen.
+export const EYE = new THREE.Vector3(0, EYE_Y, Z0);
 
 const GLARE_Y = 0.40;              // top of the glareshield
 const TOP_Y = 1.62;                // top window frame
@@ -159,9 +161,10 @@ export function buildCockpit(pfdCanvas, ndCanvas) {
     m.rotation.z = tilt;
     g.add(m);
   };
-  pillar(0, 0.085, 0);
-  pillar(-1.02, 0.11, 0.06);
-  pillar(1.02, 0.11, -0.06);
+  // No centre post: the eye sits on the aircraft axis, so one there would stare
+  // straight down the runway centreline.
+  pillar(-0.98, 0.12, 0.06);
+  pillar(0.98, 0.12, -0.06);
   const topFrame = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.30, 0.85), frame);
   topFrame.position.set(0, TOP_Y + 0.10, WINDSHIELD + 0.30);
   topFrame.rotation.x = 0.20;

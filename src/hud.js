@@ -298,6 +298,10 @@ export class PFD {
 
     if (ac.stallWarn) { g.fillStyle = RED; g.font = 'bold 15px "Segoe UI", sans-serif'; g.fillText('STALL', 404, 16); }
     else if (ac.overspeed) { g.fillStyle = RED; g.font = 'bold 15px "Segoe UI", sans-serif'; g.fillText('OVERSPEED', 380, 16); }
+    else if (ac.parkBrake) {
+      g.fillStyle = RED; g.font = 'bold 15px "Segoe UI", sans-serif';
+      g.fillText('PARK BRK', 396, 16);
+    }
   }
 
   bottom(g, ac, info) {
@@ -311,12 +315,14 @@ export class PFD {
       ['FLAP', String(FLAP_SETTINGS[ac.flapIndex]), ac.flapIndex ? GRN : '#c9d4dc'],
       ['GEAR', ac.gearPos > 0.99 ? 'DOWN' : ac.gearPos < 0.01 ? 'UP' : 'TRAN',
         ac.gearPos > 0.99 ? GRN : ac.gearPos < 0.01 ? '#c9d4dc' : AMB],
+      ['BRAKES', ac.parkBrake ? 'PARK' : ac.brake > 0.5 ? 'ON' : 'OFF',
+        ac.parkBrake ? RED : ac.brake > 0.5 ? AMB : '#c9d4dc'],
       ['SPD BRK', ac.spoilerCmd > 0.5 ? 'OUT' : 'RET', ac.spoilerCmd > 0.5 ? AMB : '#c9d4dc'],
       ['TRIM', (ac.elevTrim * 10).toFixed(1), '#c9d4dc'],
       ['G', ac.gLoad.toFixed(1), Math.abs(ac.gLoad - 1) > 1.2 ? AMB : '#c9d4dc'],
       ['GS', Math.round(Math.hypot(ac.vel.x, ac.vel.z) / KT) + 'kt', '#c9d4dc'],
     ];
-    let x = 12;
+    let x = 10;
     for (const [k, v, c] of cells) {
       g.fillStyle = 'rgba(150,170,185,0.7)';
       g.fillText(k, x, y - 7);
@@ -324,7 +330,7 @@ export class PFD {
       g.font = 'bold 12px "Consolas", monospace';
       g.fillText(v, x, y + 7);
       g.font = '11px "Segoe UI", sans-serif';
-      x += 64;
+      x += 56;
     }
   }
 }

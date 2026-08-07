@@ -108,6 +108,50 @@ export class Aircraft {
 
   get grossMass() { return OEW + PAYLOAD + this.fuel; }
 
+  /** Lift/drag/moment increments for the flap position currently deployed. */
+  flapCoeffs() {
+    let hi = FLAP_SETTINGS.findIndex(v => v >= this.flapActual - 1e-6);
+    if (hi < 0) hi = FLAP_SETTINGS.length - 1;
+    const lo = Math.max(0, hi - 1);
+    const span = FLAP_SETTINGS[hi] - FLAP_SETTINGS[lo] || 1;
+    const fr = clamp((this.flapActual - FLAP_SETTINGS[lo]) / span, 0, 1);
+    const l = arr => arr[lo] + (arr[hi] - arr[lo]) * fr;
+    return { dCL: l(FLAP_DCL), dCD: l(FLAP_DCD), dCm: l(FLAP_DCM), dAstall: l(FLAP_DASTALL) };
+  }
+
+  /**
+   * Put the aeroplane into hands-off, wings-level, 1 g flight: pitch attitude at
+   * the trim angle of attack, stabiliser trimmed to zero the pitching moment,
+   * and thrust set to balance drag. Without this you start out of trim and sink.
+   */
+  trimLevel(speed) {
+    const g = 9.80665;
+    const alt = Math.max(this.pos.y, 0);
+    const { rho, a } = isa(alt);
+    const V = Math.max(speed ?? this.vel.length(), 90);
+    const f = this.flapCoeffs();
+    const qbar = 0.5 * rho * V * V;
+
+    const CL = clamp(this.grossMass * g / (qbar * S), 0.05, 1.5);
+    const alpha = clamp((CL - 0.22 - f.dCL) / 5.35, -0.05, 0.20);
+    this.elevTrim = clamp(-(0.045 + f.dCm - 1.35 * alpha) / 0.30, -0.5, 0.5);
+
+    const hdg = this.headingDeg * Math.PI / 180;
+    this.quat.setFromEuler(new THREE.Euler(alpha, -hdg, 0, 'YXZ'));
+    this.vel.set(Math.sin(hdg) * V, 0, -Math.cos(hdg) * V);
+    this.omega.set(0, 0, 0);
+    this.elevator = 0; this.aileron = 0; this.rudder = 0;
+
+    const AR = B * B / S;
+    const k = 1 / (Math.PI * 0.80 * AR);
+    const CD = 0.0205 + f.dCD + 0.021 * this.gearPos + k * CL * CL;
+    const drag = qbar * S * CD;
+    const avail = 2 * T_MAX_ENG * Math.pow(rho / 1.225, 0.85) * (1 - 0.28 * clamp(V / a, 0, 0.9));
+    const n1 = 20 + 80 * Math.pow(clamp(drag / avail, 0, 1), 1 / 3);
+    this.n1 = [n1, n1];
+    this.throttle = clamp((n1 - 21) / 79, 0, 1);
+  }
+
   placeOnRunway(ap) {
     const dir = new THREE.Vector3(Math.sin(ap.hdg), 0, -Math.cos(ap.hdg));
     this.pos.set(ap.x - dir.x * 1200, ap.elev + 3.2, ap.z - dir.z * 1200);
@@ -117,8 +161,10 @@ export class Aircraft {
     this.throttle = 0; this.n1 = [22, 22];
     this.gearDown = true; this.gearPos = 1;
     this.flapIndex = 0; this.flapActual = 0;
-    this.parkBrake = true;
     this.resetTransient();
+    // Deliberately released: a parking brake at spawn silently makes the
+    // aeroplane un-takeoffable, and the annunciator only helps if you set it.
+    this.parkBrake = false;
   }
 
   resetTransient() {
@@ -133,17 +179,26 @@ export class Aircraft {
   placeAirborne(ap, distNM = 12, altFt = 6000) {
     const dir = new THREE.Vector3(Math.sin(ap.hdg), 0, -Math.cos(ap.hdg));
     const d = distNM * 1852;
-    this.pos.set(ap.x - dir.x * d, ap.elev + altFt * FT, ap.z - dir.z * d);
+
+    // Stay clear of whatever is between here and the field — inbound terrain can
+    // easily be higher than the airport, and starting inside a ridge is fatal.
+    let highest = ap.elev;
+    for (let s = 0; s <= 1.0001; s += 0.04) {
+      highest = Math.max(highest, terrainHeight(ap.x - dir.x * d * s, ap.z - dir.z * d * s));
+    }
+    const y = Math.max(ap.elev + altFt * FT, highest + 750);
+
+    this.pos.set(ap.x - dir.x * d, y, ap.z - dir.z * d);
     this.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -ap.hdg);
     this.vel.copy(dir).multiplyScalar(140);
-    this.omega.set(0, 0, 0);
-    this.throttle = 0.6; this.n1 = [70, 70];
     this.gearDown = false; this.gearPos = 0;
     this.flapIndex = 0; this.flapActual = 0;
     this.parkBrake = false;
     this.resetTransient();
-    this.ap.alt = altFt * FT;
+    this.trimLevel(140);              // hands-off straight and level
+    this.ap.alt = this.pos.y;
     this.ap.hdg = (ap.hdg * 180 / Math.PI + 360) % 360;
+    this.ap.spd = 140 * Math.sqrt(isa(Math.max(this.pos.y, 0)).rho / 1.225) / KT;
   }
 
   get headingDeg() {
@@ -232,16 +287,8 @@ export class Aircraft {
     this.agl = this.pos.y - groundY;
 
     // --- aerodynamic coefficients -----------------------------------------
-    const fi = this.flapActual / 40;
-    const fIdx = FLAP_SETTINGS.findIndex(v => v >= this.flapActual - 1e-6);
-    const lo = Math.max(0, fIdx - 1), hi = Math.max(0, fIdx);
-    const span = FLAP_SETTINGS[hi] - FLAP_SETTINGS[lo] || 1;
-    const fr = clamp((this.flapActual - FLAP_SETTINGS[lo]) / span, 0, 1);
-    const lerp = (arr) => arr[lo] + (arr[hi] - arr[lo]) * fr;
-    const dCLflap = lerp(FLAP_DCL);
-    const dCDflap = lerp(FLAP_DCD);
-    const dCmflap = lerp(FLAP_DCM);
-    const dAstall = lerp(FLAP_DASTALL);
+    const fc = this.flapCoeffs();
+    const dCLflap = fc.dCL, dCDflap = fc.dCD, dCmflap = fc.dCm, dAstall = fc.dAstall;
 
     const AR = B * B / S;
     const geH = Math.max(this.agl, 0) / B;
@@ -422,7 +469,8 @@ export class Aircraft {
     }
 
     const vs1g = this.stallSpeed();
-    this.stallWarn = !onGround && V > 5 && (alpha > aStall * 0.92 || this.ias < vs1g * 1.03);
+    this.stallWarn = !onGround && this.agl > 3 && V > 5
+      && (alpha > aStall * 0.92 || this.ias < vs1g * 1.03);
     this.overspeed = this.ias > 340 * KT || this.mach > 0.86;
   }
 

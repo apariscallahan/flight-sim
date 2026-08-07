@@ -143,7 +143,6 @@ export class Controls {
 
     ac.brake = held('KeyB') ? 1 : (pad && pad.buttons[0] && pad.buttons[0].pressed ? 1 : 0);
     ac.reverse = held('KeyR') ? 1 : 0;
-    if (ac.brake > 0 || Math.abs(this.pitchCmd) > 0.02) ac.parkBrake = ac.parkBrake && ac.brake === 0 && false || ac.parkBrake;
   }
 }
 

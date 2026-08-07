@@ -159,7 +159,7 @@ const actions = {
   togglePause() { ui.paused = !ui.paused; toast(ui.paused ? 'Paused' : 'Resumed'); },
   mapRange(d) { minimap.cycleRange(d); toast('Map range ' + [5, 10, 20, 40, 80, 160][minimap.rangeIdx] + ' NM'); },
   resetRunway() { const a = nearestAirport(); if (a) { ac.placeOnRunway(a); toast('Positioned at ' + a.name); } },
-  resetApproach() { const a = nearestAirport(); if (a) { ac.placeAirborne(a, 11, 3800); toast('On final for ' + a.name); } },
+  resetApproach() { const a = nearestAirport(); if (a) { ac.placeAirborne(a, 9, 3000); toast('On final for ' + a.name); } },
   ap(which) {
     const A = ac.ap;
     if (which === 'master') {
@@ -258,7 +258,7 @@ resize();
   const list = airportsNear(0, 0, 260000, 12);
   setAirportUniformData(list);
   const home = list[0];
-  if (home) ac.placeAirborne(home, 13, 4200);
+  if (home) ac.placeAirborne(home, 9, 3000);
   else { ac.pos.set(0, 3000, 0); ac.vel.set(0, 0, -150); }
   ac.ap.alt = ac.pos.y;
   syncApInputs();
@@ -507,7 +507,7 @@ window.addEventListener('pointerdown', () => audio.start(), { once: true });
 window.addEventListener('keydown', () => audio.start(), { once: true });
 
 // Debug handle (also handy from the browser console).
-window.SIM = { ac, ui, actions, renderer, scene, camera, terrain, weather, minimap, tick, setCam, airportsNear };
+window.SIM = { ac, ui, actions, controls, renderer, scene, camera, terrain, weather, minimap, tick, setCam, airportsNear };
 
 el('loadMsg').textContent = 'compiling shaders…';
 requestAnimationFrame(frame);
