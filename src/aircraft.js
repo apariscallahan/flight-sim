@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { terrainHeight, terrainNormal } from './terrainCommon.js';
+import { terrainHeight, terrainNormal, RWY_LENGTH } from './terrainCommon.js';
 import { snoise } from './noise.js';
 
 export const KT = 0.514444;      // knots -> m/s
@@ -52,6 +52,19 @@ const BELLY = [
 ];
 
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+/** Idle N1 rises with altitude, from about 22% on the ground to 50% at cruise. */
+function idleN1(alt) { return 21.5 + clamp(alt, 0, 12000) / 12000 * 29; }
+
+/**
+ * Fraction of rated thrust produced at a given N1. A high-bypass turbofan is
+ * strongly non-linear — 70% N1 is only about a third of takeoff thrust — and it
+ * never reaches zero, which is why a jet creeps forward at idle.
+ */
+function thrustFraction(n1) {
+  const x = clamp((n1 - 20) / 80, 0, 1);
+  return 0.040 + 0.960 * Math.pow(x, 2.2);
+}
 function approach(cur, target, rate, dt) {
   const d = target - cur;
   const m = rate * dt;
@@ -68,9 +81,14 @@ export class Aircraft {
     this.fuel = 12000;
     this.mass = OEW + PAYLOAD + this.fuel;
 
-    // controls (-1..1)
+    // Pilot commands (-1..1) and the deflections the surfaces have actually
+    // reached — hydraulic actuators take time, which is most of what makes a
+    // large aeroplane feel heavy rather than twitchy.
     this.elevator = 0; this.aileron = 0; this.rudder = 0;
+    this.elevSurf = 0; this.ailSurf = 0; this.rudSurf = 0;
     this.elevTrim = 0.0;
+    this.buffet = 0; this.rumble = 0;
+    this._ydWash = 0; this._buffPhase = 0;
     this.throttle = 0.0;
     this.n1 = [20, 20];
     this.flapIndex = 0;
@@ -147,14 +165,18 @@ export class Aircraft {
     const CD = 0.0205 + f.dCD + 0.021 * this.gearPos + k * CL * CL;
     const drag = qbar * S * CD;
     const avail = 2 * T_MAX_ENG * Math.pow(rho / 1.225, 0.85) * (1 - 0.28 * clamp(V / a, 0, 0.9));
-    const n1 = 20 + 80 * Math.pow(clamp(drag / avail, 0, 1), 1 / 3);
+    const frac = clamp((clamp(drag / avail, 0, 1) - 0.040) / 0.960, 0, 1);
+    const n1 = 20 + 80 * Math.pow(frac, 1 / 2.2);
     this.n1 = [n1, n1];
-    this.throttle = clamp((n1 - 21) / 79, 0, 1);
+    const idle = idleN1(alt);
+    this.throttle = clamp((n1 - idle) / (100 - idle), 0, 1);
   }
 
   placeOnRunway(ap) {
     const dir = new THREE.Vector3(Math.sin(ap.hdg), 0, -Math.cos(ap.hdg));
-    this.pos.set(ap.x - dir.x * 1200, ap.elev + 3.2, ap.z - dir.z * 1200);
+    // Line up on the threshold so the whole runway is available.
+    const back = RWY_LENGTH / 2 - 70;
+    this.pos.set(ap.x - dir.x * back, ap.elev + 3.2, ap.z - dir.z * back);
     this.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -ap.hdg);
     this.vel.set(0, 0, 0);
     this.omega.set(0, 0, 0);
@@ -231,15 +253,25 @@ export class Aircraft {
     this.windTarget.set(Math.cos(dir) * strength, 0, Math.sin(dir) * strength);
     this.wind.lerp(this.windTarget, Math.min(dt * 0.15, 1));
 
-    // turbulence: stronger low down, in cloud, and in bad weather
+    // Turbulence: stronger low down and in bad weather. Two scales — slow swells
+    // plus a sharper ripple — and a rotational component, because what you feel
+    // in an aeroplane is mostly the aircraft being rolled and yawed, not shoved.
     const turbScale = this.turbulence * (0.4 + weatherWind);
     const t = this._t;
-    const gust = (a, b) => snoise(t * a + b, this.pos.y * 0.0007 + b);
+    const slow = (a, b) => snoise(t * a + b, this.pos.y * 0.0007 + b);
+    const fast = (a, b) => snoise(t * a + b, this.pos.x * 0.00035 + b);
     this._gust = this._gust || new THREE.Vector3();
+    this._gustRot = this._gustRot || new THREE.Vector3();
     const lowLevel = 1 + 2.0 * Math.exp(-Math.max(this.agl, 0) / 700);
+    const k = turbScale * lowLevel;
     this._gust.set(
-      gust(0.7, 0) * 3.0, gust(0.55, 40) * 2.4, gust(0.63, 80) * 3.0
-    ).multiplyScalar(turbScale * lowLevel);
+      slow(0.7, 0) * 3.0 + fast(2.9, 11) * 1.0,
+      slow(0.55, 40) * 2.4 + fast(3.4, 51) * 1.2,
+      slow(0.63, 80) * 3.0 + fast(3.1, 91) * 1.0
+    ).multiplyScalar(k);
+    this._gustRot.set(
+      fast(2.2, 7) * 0.05, fast(1.7, 23) * 0.03, fast(2.6, 37) * 0.07
+    ).multiplyScalar(k);
   }
 
   step(dt) {
@@ -252,11 +284,12 @@ export class Aircraft {
     this.gearPos = approach(this.gearPos, this.gearDown ? 1 : 0, 1 / 9, dt);
     this.spoilers = approach(this.spoilers, this.spoilerCmd, 1.6, dt);
 
-    // engines: first order spool
-    const idleN1 = 21 + Math.max(0, this.pos.y) * 0.0006 * 100 * 0.01;
-    const cmdN1 = idleN1 + this.throttle * (100 - idleN1);
+    // Engines. Spool time shortens as N1 rises — a turbofan accelerates lazily
+    // off idle and briskly once the core is already spinning.
+    const idle = idleN1(this.pos.y);
+    const cmdN1 = idle + this.throttle * (100 - idle);
     for (let i = 0; i < 2; i++) {
-      const tau = this.n1[i] < cmdN1 ? 2.6 : 1.6;
+      const tau = this.n1[i] < cmdN1 ? Math.max(3.1 - 0.020 * this.n1[i], 0.9) : 1.5;
       this.n1[i] += (cmdN1 - this.n1[i]) * Math.min(dt / tau, 1);
     }
 
@@ -281,6 +314,17 @@ export class Aircraft {
     this.alpha = alpha; this.beta = beta;
 
     const p = -this.omega.z, qq = this.omega.x, r = -this.omega.y;
+
+    // --- yaw damper --------------------------------------------------------
+    // Every jet transport has one. It opposes yaw rate to kill the Dutch roll,
+    // and washes out over a few seconds so it does not fight a steady turn.
+    this._ydWash += (r - this._ydWash) * Math.min(dt / 5.0, 1);
+    const yawDamper = this.onGround ? 0 : clamp(-(r - this._ydWash) * 4.0, -0.35, 0.35);
+
+    // --- control surface actuators ----------------------------------------
+    this.elevSurf = approach(this.elevSurf, clamp(this.elevator, -1, 1), 2.3, dt);
+    this.ailSurf = approach(this.ailSurf, clamp(this.aileron, -1, 1), 3.0, dt);
+    this.rudSurf = approach(this.rudSurf, clamp(this.rudder + yawDamper, -1, 1), 2.3, dt);
 
     // --- terrain / ground --------------------------------------------------
     const groundY = terrainHeight(this.pos.x, this.pos.z);
@@ -310,7 +354,7 @@ export class Aircraft {
 
     // control inputs use stick sense: +elevator = nose up, +rudder = nose right.
     // Control derivatives are scaled for a unit input meaning full deflection.
-    CL += 6.2 * qhat - 0.06 * this.elevator - 0.42 * this.spoilers;
+    CL += 6.2 * qhat - 0.06 * this.elevSurf - 0.42 * this.spoilers;
 
     const e = 0.80;
     const k = 1 / (Math.PI * e * AR);
@@ -320,14 +364,14 @@ export class Aircraft {
     if (this.mach > 0.72) CD += 0.045 * Math.pow(this.mach - 0.72, 2) / 0.0016 * 0.001;
     CD += 0.28 * Math.abs(Math.sin(beta)) * Math.abs(Math.sin(beta));
 
-    const CY = -0.92 * beta - 0.080 * this.rudder;
+    const CY = -0.92 * beta - 0.080 * this.rudSurf;
 
     let Cl = -0.13 * beta - 0.50 * phat + 0.11 * rhat
-      + 0.0230 * this.aileron + 0.0060 * this.rudder;
+      + 0.0230 * this.ailSurf + 0.0060 * this.rudSurf;
     let Cm = 0.045 + dCmflap - 1.35 * alpha - 24.0 * qhat
-      + 0.30 * (this.elevator + this.elevTrim) - 0.05 * this.spoilers;
+      + 0.30 * (this.elevSurf + this.elevTrim) - 0.05 * this.spoilers;
     let Cn = 0.132 * beta - 0.035 * phat - 0.20 * rhat
-      - 0.0028 * this.aileron + 0.045 * this.rudder;
+      - 0.0028 * this.ailSurf + 0.045 * this.rudSurf;
 
     const qbar = 0.5 * rho * V * V;
     const Lift = qbar * S * CL;
@@ -348,9 +392,8 @@ export class Aircraft {
     const lapse = Math.pow(rho / rho0, 0.85);
     let thrust = 0;
     for (let i = 0; i < N_ENG; i++) {
-      const frac = Math.pow(clamp((this.n1[i] - 20) / 80, 0, 1), 3.0);
-      let T = frac * T_MAX_ENG * lapse * (1 - 0.28 * clamp(this.mach, 0, 0.9));
-      thrust += T;
+      thrust += thrustFraction(this.n1[i]) * T_MAX_ENG * lapse
+        * (1 - 0.28 * clamp(this.mach, 0, 0.9));
     }
     if (this.reverse > 0 && this.onGround) thrust *= -0.42 * this.reverse;
     Fb.z += -thrust;                       // forward is -z
@@ -454,7 +497,25 @@ export class Aircraft {
       (Mb.x - gyro.x) / IXX, (Mb.y - gyro.y) / IYY, (Mb.z - gyro.z) / IZZ
     );
     this.omega.addScaledVector(domega, dt);
+    if (this._gustRot && !onGround) this.omega.addScaledVector(this._gustRot, dt);
     this.omega.multiplyScalar(1 - Math.min(dt * 0.02, 0.5));
+
+    // --- airframe buffet ---------------------------------------------------
+    // Separated flow near the stall, and wake off deployed speedbrakes, shakes
+    // the aeroplane. Driven by phase-shifted sinusoids so it oscillates about
+    // zero instead of random-walking the attitude away.
+    const stallProx = clamp((alpha - aStall * 0.76) / (aStall * 0.24), 0, 1);
+    const brakeBuffet = this.spoilers * 0.30 * clamp(V / 90, 0, 1);
+    this.buffet = Math.min(1, stallProx + brakeBuffet);
+    if (this.buffet > 0.01 && V > 20) {
+      this._buffPhase += dt * 34.0;
+      const b = this.buffet * 1.6;
+      this.omega.x += Math.sin(this._buffPhase * 1.00) * b * dt;
+      this.omega.z += Math.sin(this._buffPhase * 1.37 + 1.1) * b * 1.4 * dt;
+      this.omega.y += Math.sin(this._buffPhase * 0.83 + 2.3) * b * 0.5 * dt;
+    }
+    const gs = Math.hypot(this.vel.x, this.vel.z);
+    this.rumble = onGround ? clamp(gs / 70, 0, 1) : 0;
 
     const dq = new THREE.Quaternion(
       this.omega.x * dt * 0.5, this.omega.y * dt * 0.5, this.omega.z * dt * 0.5, 1

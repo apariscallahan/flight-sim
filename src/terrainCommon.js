@@ -6,13 +6,15 @@ import { snoise, fbmW, hash2 } from './noise.js';
 
 export const MAX_AIRPORTS = 12;
 
-// Airport flattening footprint (metres).
-export const AP_HALF_L = 1500.0;
+// Airport flattening footprint (metres). The flat core must comfortably contain
+// the runway plus its overruns.
+export const AP_HALF_L = 1850.0;
 export const AP_HALF_W = 300.0;
 export const AP_FALLOFF = 1200.0;
 
-// Runway geometry
-export const RWY_LENGTH = 2800.0;
+// Runway geometry — 3200 m, a normal length for a jet airport and enough for a
+// fully loaded 737 out of a high-elevation field.
+export const RWY_LENGTH = 3200.0;
 export const RWY_WIDTH = 46.0;
 
 export const CLIMATE_SCALE = 420000.0; // metres from equator to polar climate

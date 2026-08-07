@@ -28,9 +28,11 @@ level on its own — nothing needs to be held.
 Press **Enter** to be placed at the start of a runway, then:
 
 1. **Flaps 5** — press `]` twice. The `FLAP` readout on the PFD should show `5`.
-2. **Full thrust** — hold **Shift** for about three seconds until `N1` reaches
-   100 % and `THR` shows `100%`. You will start rolling immediately; the
-   parking brake is off.
+2. **Full thrust** — hold **Shift** for about two seconds until `THR` shows
+   `100%`. The engines take a further few seconds to spool: `N1` climbs to about
+   93 % after five seconds and 100 % shortly after. **The first couple of
+   seconds feel like nothing is happening — that is correct.** A loaded jet is
+   slow to start rolling, then accelerates hard.
 3. **Keep straight** — use `Q` and `E` for the nosewheel if you drift. You
    shouldn't need much.
 4. **Rotate at 150 kt** — watch the speed tape on the left of the PFD. At 150,
@@ -41,9 +43,11 @@ Press **Enter** to be placed at the start of a runway, then:
 6. **Flaps up** passing about 1000 ft — press `[` twice.
 7. Trim off any stick force with `,` and `.` so you can let go of the yoke.
 
-That is roughly a 40-second ground roll and a 3000 fpm initial climb. To level
-off, press `1` to engage the autopilot — it captures the heading, altitude and
-speed you are at, and you can then type new ones into the panel on the right.
+You lift off after about 1500 m of a 3200 m runway — roughly 35 seconds — and
+climb away at around 3000 fpm. You start lined up on the threshold, so the whole
+runway is ahead of you. To level off, press `1` to engage the autopilot: it
+captures the heading, altitude and speed you are at, and you can then type new
+ones into the panel on the right.
 
 ### If it won't accelerate
 
@@ -78,9 +82,33 @@ as three sprung struts with load-dependent tyre friction, brakes, thrust
 reverse and nosewheel steering; there are separate fuselage contact points, so a
 tailstrike or gear-up landing does what you would expect.
 
-Representative behaviour: rotation around 150 kt, ~12°/s roll rate at full
+Representative behaviour: rotation around 150 kt, ~13°/s roll rate at full
 aileron, 2.2 g at full aft stick from cruise trim, and a stable 3° approach at
 Vref on roughly 70 % N1.
+
+### What makes it feel heavy
+
+A lot of the difference between "aeroplane" and "spaceship with wings" is not in
+the aerodynamics but in everything between your hand and the air:
+
+- **Thrust is strongly non-linear in N1.** 70 % N1 is only about a third of
+  takeoff thrust. Idle is not zero either, so the aeroplane creeps when you
+  release the brakes. Spool time shortens as the core spins up — lazy off idle,
+  brisk once it is turning.
+- **Control surfaces lag the controls.** The stick and the elevator are separate
+  states: your input ramps like a hand moving a heavy column, and the surface
+  then takes about a third of a second to reach it. Full aileron takes ~3 s to
+  reach a 25° bank rather than snapping there.
+- **A yaw damper**, as every jet transport has. It opposes yaw rate and washes
+  out over five seconds so it doesn't fight a steady turn — this is why the
+  aeroplane tracks smoothly instead of wallowing in Dutch roll.
+- **Buffet.** Separated flow near the stall, and wake off deployed speedbrakes,
+  shakes the airframe — and the camera with it. It arrives a few knots before
+  the stall warning, so you feel the edge before you're told about it.
+- **Turbulence in two scales plus rotation.** Slow swells, a sharper ripple, and
+  gusts that roll and yaw you rather than just shoving you sideways, which is
+  what you actually feel in an aeroplane. It strengthens near the ground.
+- **Runway rumble** through the gear, scaled with groundspeed.
 
 The autopilot has heading, altitude and speed channels with bank limiting and
 speed-based envelope protection, so it will not stall the aircraft in a climb.

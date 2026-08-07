@@ -277,6 +277,7 @@ const camVel = new THREE.Vector3();
 let last = performance.now() / 1000;
 let simTime = 0;
 let fps = 60, frames = 0, fpsT = 0;
+let shakePhase = 0;
 let started = false;
 
 const dayAmb = new THREE.Color(0.30, 0.46, 0.86);
@@ -394,6 +395,18 @@ function updateCamera(dt) {
     camera.lookAt(ac.pos);
     camera.fov = 50;
   }
+  // Airframe shake: stall/speedbrake buffet, and the runway hammering through
+  // the gear. Strongest in the cockpit, damped down in the external views.
+  const shakeAmt = (ac.buffet * 0.85 + ac.rumble * 0.30) * (ui.cam === 0 ? 1 : 0.35);
+  if (shakeAmt > 0.004) {
+    shakePhase += dt * 47;
+    const a = shakeAmt * 0.012;
+    camera.rotateZ(Math.sin(shakePhase * 1.00) * a);
+    camera.rotateX(Math.sin(shakePhase * 1.43 + 1.7) * a * 0.8);
+    camera.rotateY(Math.sin(shakePhase * 0.79 + 3.1) * a * 0.6);
+    camera.position.y += Math.sin(shakePhase * 1.61) * shakeAmt * 0.035;
+  }
+
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
 }

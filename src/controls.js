@@ -118,9 +118,11 @@ export class Controls {
       const d = tgt - cur;
       return Math.abs(d) < rate * dt ? tgt : cur + Math.sign(d) * rate * dt;
     };
-    this.pitchCmd = toward(this.pitchCmd, pitchIn, 2.0, 2.8);
-    this.rollCmd = toward(this.rollCmd, rollIn, 3.2, 4.2);
-    this.yawCmd = toward(this.yawCmd, yawIn, 2.6, 3.4);
+    // Deliberately unhurried: this stands in for a pilot moving a heavy control
+    // column, and the surfaces themselves add further lag in the flight model.
+    this.pitchCmd = toward(this.pitchCmd, pitchIn, 1.6, 2.1);
+    this.rollCmd = toward(this.rollCmd, rollIn, 2.5, 3.1);
+    this.yawCmd = toward(this.yawCmd, yawIn, 2.1, 2.7);
 
     // gain schedule: less deflection needed as dynamic pressure rises
     const kt = ac.ias / KT;
@@ -135,8 +137,8 @@ export class Controls {
     }
 
     if (!(ac.ap.on && ac.ap.spdHold)) {
-      if (held('ShiftLeft', 'ShiftRight', 'PageUp')) this.actions.throttleDelta(0.42 * dt);
-      if (held('ControlLeft', 'ControlRight', 'PageDown')) this.actions.throttleDelta(-0.42 * dt);
+      if (held('ShiftLeft', 'ShiftRight', 'PageUp')) this.actions.throttleDelta(0.60 * dt);
+      if (held('ControlLeft', 'ControlRight', 'PageDown')) this.actions.throttleDelta(-0.60 * dt);
     }
     if (held('Comma')) ac.elevTrim = clamp(ac.elevTrim - 0.09 * dt, -0.5, 0.5);
     if (held('Period')) ac.elevTrim = clamp(ac.elevTrim + 0.09 * dt, -0.5, 0.5);

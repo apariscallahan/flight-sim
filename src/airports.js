@@ -24,18 +24,21 @@ export function airportForCell(cx, cz) {
   const key = cx + ',' + cz;
   if (cellCache.has(key)) return cellCache.get(key);
   let result = null;
-  for (let attempt = 0; attempt < 12; attempt++) {
+  for (let attempt = 0; attempt < 16; attempt++) {
     const hx = hash2(cx * 92821 + attempt * 7919, cz * 68917 + 13);
     const hz = hash2(cx * 40499 + 31, cz * 74093 + attempt * 5417);
     const x = (cx + 0.15 + hx * 0.7) * CELL;
     const z = (cz + 0.15 + hz * 0.7) * CELL;
 
     let lo = Infinity, hi = -Infinity, sum = 0, n = 0;
-    for (const [ox, oz] of [[0, 0], [1400, 0], [-1400, 0], [0, 1400], [0, -1400], [1000, 1000], [-1000, -1000]]) {
+    for (const [ox, oz] of [[0, 0], [1800, 0], [-1800, 0], [0, 1800], [0, -1800],
+      [900, 0], [-900, 0], [1250, 1250], [-1250, -1250]]) {
       const h = terrainBase(x + ox, z + oz);
       lo = Math.min(lo, h); hi = Math.max(hi, h); sum += h; n++;
     }
-    if (lo < 10 || hi - lo > 280) continue;
+    // The flattening blends over AP_FALLOFF, so a fair amount of natural relief
+    // across the site is fine — it just becomes a gentle shelf.
+    if (lo < 10 || hi - lo > 360) continue;
     const elev = sum / n;
 
     // Both ends need a usable approach and departure corridor: a 2.3% surface

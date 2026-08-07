@@ -602,9 +602,10 @@ export function animate737(model, ac, dt, time) {
   const { surfaces, engines, noseGear, mainGears, navLights, lightMats } = model.userData;
   const gp = ac.gearPos;
 
-  for (const a of surfaces.aileron) a.g.rotation.x = -a.sign * ac.aileron * 0.35;
-  for (const e of surfaces.elevator) e.g.rotation.x = -(ac.elevator + ac.elevTrim) * 0.38;
-  surfaces.rudder.rotation.y = -ac.rudder * 0.42;
+  // driven by the surfaces' actual deflection, not the raw pilot command
+  for (const a of surfaces.aileron) a.g.rotation.x = -a.sign * ac.ailSurf * 0.35;
+  for (const e of surfaces.elevator) e.g.rotation.x = -(ac.elevSurf + ac.elevTrim) * 0.38;
+  surfaces.rudder.rotation.y = -ac.rudSurf * 0.42;
 
   const fdeg = ac.flapActual / 40;
   for (const f of surfaces.flap) {
