@@ -1,0 +1,17 @@
+{
+  "name": "skywind-737",
+  "version": "1.0.0",
+  "description": "Procedural browser flight simulator with a 737-class flight model",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "three": "^0.180.0"
+  },
+  "private": true
+}
