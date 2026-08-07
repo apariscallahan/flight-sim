@@ -50,7 +50,7 @@ export class Minimap {
     }
     if (this.job) {
       const j = this.job;
-      const rows = Math.min(N + 1 - j.row, 12);
+      const rows = Math.min(N + 1 - j.row, 6);
       const step = (j.half * 2) / N;
       for (let r = 0; r < rows; r++) {
         const zz = j.z - j.half + (j.row + r) * step;

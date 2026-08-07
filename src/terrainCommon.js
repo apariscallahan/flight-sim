@@ -33,35 +33,38 @@ float ridgeN(float n){ n = 1.0 - abs(n); return n*n; }
 
 // Continental shelf / landmass mask, 0 = deep ocean .. 1 = solid interior
 float continentField(vec2 p){
-  return fbmW(p + vec2(1200.0, -800.0), 0.0000220, 5, 1e9);
+  return fbmW(p + vec2(1200.0, -800.0), 0.0000220, 4, 1e9);
 }
 
+// Octave counts here are deliberately lean: this runs once per terrain vertex
+// and again for every CPU-side ground query, so it is the hottest code in the
+// project. Fine surface texture is added in the fragment shader instead.
 float terrainBase(vec2 p, float maxFreq){
   float cont = continentField(p);
   float land = smoothstep(-0.06, 0.20, cont);
   float base = -520.0 + 1750.0 * smoothstep(-0.42, 0.60, cont);
 
   // Where mountain belts run
-  float mm = fbmW(p + vec2(-4100.0, 2600.0), 0.0000480, 4, 1e9);
+  float mm = fbmW(p + vec2(-4100.0, 2600.0), 0.0000480, 3, 1e9);
   float mountain = smoothstep(0.00, 0.46, mm) * land;
 
   // Ridged multifractal: each octave is gated by the one above it, so detail
   // gathers along ridgelines and the flanks and valleys stay smooth.
   float r = 0.0, a = 0.5, f = 0.00030, w = 1.0;
-  for (int i = 0; i < 7; i++){
+  for (int i = 0; i < 6; i++){
     if (f > maxFreq) break;
     float n = ridgeN(snoise(p * f + vec2(17.3, -9.1))) * w;
     w = clamp(n * 2.4, 0.0, 1.0);
     r += a * n;
     f *= 2.07; a *= 0.52;
   }
-  r *= 1.35;
+  r *= 1.42;
   float h = base + mountain * r * 2900.0;
 
   // Rolling hills + valleys
-  h += land * fbmW(p + vec2(88.0, 33.0), 0.00105, 5, maxFreq) * 62.0;
+  h += land * fbmW(p + vec2(88.0, 33.0), 0.00105, 4, maxFreq) * 64.0;
   // Fine surface relief
-  h += land * fbmW(p + vec2(-500.0, 900.0), 0.00850, 4, maxFreq) * 7.0;
+  h += land * fbmW(p + vec2(-500.0, 900.0), 0.00850, 3, maxFreq) * 7.0;
   return h;
 }
 
@@ -90,8 +93,8 @@ float terrainHeight(vec2 p, float maxFreq){
 vec2 climate(vec2 p){
   float lat = clamp(p.y / CLIMATE_SCALE, -1.6, 1.6);
   float t = 0.70 - 0.78 * abs(lat)
-          + 0.30 * fbmW(p + vec2(9000.0, 4000.0), 0.0000165, 3, 1e9);
-  float m = 0.50 + 0.62 * fbmW(p + vec2(-21000.0, 15000.0), 0.0000205, 4, 1e9);
+          + 0.30 * fbmW(p + vec2(9000.0, 4000.0), 0.0000165, 2, 1e9);
+  float m = 0.50 + 0.62 * fbmW(p + vec2(-21000.0, 15000.0), 0.0000205, 2, 1e9);
   return clamp(vec2(t, m), 0.0, 1.0);
 }
 `;
@@ -107,7 +110,7 @@ export function setAirportUniformData(list) { apData = list; }
 function ridgeN(n) { n = 1 - Math.abs(n); return n * n; }
 
 export function continentField(x, z) {
-  return fbmW(x + 1200, z - 800, 0.0000220, 5, 1e9);
+  return fbmW(x + 1200, z - 800, 0.0000220, 4, 1e9);
 }
 
 export function terrainBase(x, z, maxFreq = 1e9) {
@@ -115,21 +118,21 @@ export function terrainBase(x, z, maxFreq = 1e9) {
   const land = smoothstep(-0.06, 0.20, cont);
   const base = -520 + 1750 * smoothstep(-0.42, 0.60, cont);
 
-  const mm = fbmW(x - 4100, z + 2600, 0.0000480, 4, 1e9);
+  const mm = fbmW(x - 4100, z + 2600, 0.0000480, 3, 1e9);
   const mountain = smoothstep(0.0, 0.46, mm) * land;
 
   let r = 0, a = 0.5, f = 0.00030, w = 1;
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 6; i++) {
     if (f > maxFreq) break;
     const n = ridgeN(snoise(x * f + 17.3, z * f - 9.1)) * w;
     w = clamp(n * 2.4, 0, 1);
     r += a * n;
     f *= 2.07; a *= 0.52;
   }
-  r *= 1.35;
+  r *= 1.42;
   let h = base + mountain * r * 2900;
-  h += land * fbmW(x + 88, z + 33, 0.00105, 5, maxFreq) * 62;
-  h += land * fbmW(x - 500, z + 900, 0.00850, 4, maxFreq) * 7;
+  h += land * fbmW(x + 88, z + 33, 0.00105, 4, maxFreq) * 64;
+  h += land * fbmW(x - 500, z + 900, 0.00850, 3, maxFreq) * 7;
   return h;
 }
 
@@ -197,8 +200,8 @@ export function terrainNormal(x, z, eps = 2.0, out = { x: 0, y: 1, z: 0 }) {
 export function climate(x, z) {
   const lat = clamp(z / CLIMATE_SCALE, -1.6, 1.6);
   const t = 0.70 - 0.78 * Math.abs(lat)
-    + 0.30 * fbmW(x + 9000, z + 4000, 0.0000165, 3, 1e9);
-  const m = 0.50 + 0.62 * fbmW(x - 21000, z + 15000, 0.0000205, 4, 1e9);
+    + 0.30 * fbmW(x + 9000, z + 4000, 0.0000165, 2, 1e9);
+  const m = 0.50 + 0.62 * fbmW(x - 21000, z + 15000, 0.0000205, 2, 1e9);
   return { t: clamp(t, 0, 1), m: clamp(m, 0, 1) };
 }
 

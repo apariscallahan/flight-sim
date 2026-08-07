@@ -169,7 +169,10 @@ export class Weather {
 
     this.lightning = 0;
     this._nextBolt = 4 + Math.random() * 8;
+    this.density = 1;              // scaled down by the quality manager
   }
+
+  setQuality(density) { this.density = density; }
 
   /** mode: clear | fair | overcast | rain | storm | snow */
   setMode(mode) { this.mode = mode; }
@@ -195,7 +198,7 @@ export class Weather {
     motion.copy(camVel).multiplyScalar(-1);
 
     const rainOn = p.rain > 0.01;
-    this.rainGeo.instanceCount = rainOn ? Math.floor(RAIN_N * p.rain) : 0;
+    this.rainGeo.instanceCount = rainOn ? Math.floor(RAIN_N * p.rain * this.density) : 0;
     if (rainOn) {
       const u = this.rainMat.uniforms;
       u.uMotion.value.copy(motion);
@@ -205,7 +208,7 @@ export class Weather {
     }
 
     const snowOn = p.snow > 0.01;
-    this.snowGeo.instanceCount = snowOn ? Math.floor(SNOW_N * p.snow) : 0;
+    this.snowGeo.instanceCount = snowOn ? Math.floor(SNOW_N * p.snow * this.density) : 0;
     if (snowOn) {
       const u = this.snowMat.uniforms;
       u.uMotion.value.copy(motion).multiplyScalar(0.92);

@@ -125,12 +125,21 @@ export function buildCockpit(pfdCanvas, ndCanvas) {
   panel.rotation.x = 0.14;
   g.add(panel);
 
+  // One texture per source canvas, shared by both pilots' screens. Uploading a
+  // canvas to the GPU is expensive — four separate uploads a frame was costing
+  // more than the entire rest of the scene.
   const displays = [];
+  const texCache = new Map();
   const mkDisplay = (canvas, w, h, x, y) => {
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.minFilter = THREE.LinearFilter;
-    tex.generateMipmaps = false;
+    let tex = texCache.get(canvas);
+    if (!tex) {
+      tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearFilter;
+      tex.generateMipmaps = false;
+      texCache.set(canvas, tex);
+      displays.push(tex);
+    }
     const bez = new THREE.Mesh(new THREE.BoxGeometry(w + 0.045, h + 0.045, 0.035), dark);
     bez.position.set(x, y, WINDSHIELD + 0.545);
     bez.rotation.x = 0.14;
@@ -142,7 +151,6 @@ export function buildCockpit(pfdCanvas, ndCanvas) {
     m.position.set(x, y + 0.0035, WINDSHIELD + 0.567);
     m.rotation.x = 0.14;
     g.add(m);
-    displays.push(tex);
   };
   for (const s of [-1, 1]) {
     mkDisplay(pfdCanvas, 0.40, 0.31, s * 0.86, GLARE_Y - 0.27);
@@ -246,7 +254,7 @@ export function buildCockpit(pfdCanvas, ndCanvas) {
   return g;
 }
 
-export function updateCockpit(ck, ac, exposure = 0.44) {
+export function updateCockpit(ck, ac, exposure = 0.44, uploadDisplays = true) {
   const u = ck.userData;
   const k = 0.44 / Math.max(exposure, 0.05);
   for (const [mat, base] of u.fillMats) mat.uniforms.uEmissiveI.value = base * k;
@@ -256,5 +264,5 @@ export function updateCockpit(ck, ac, exposure = 0.44) {
     y.g.rotation.z = -ac.aileron * 0.55;
     y.g.position.z = y.baseZ + ac.elevator * 0.085;
   }
-  for (const t of u.displays) t.needsUpdate = true;
+  if (uploadDisplays) for (const t of u.displays) t.needsUpdate = true;
 }

@@ -167,10 +167,19 @@
     <span class="chip" data-cam="2">Wing</span>
     <span class="chip" data-cam="3">Orbit</span>
   </div>
+  <div class="row"><label>Graphics</label>
+    <select id="qualitySel">
+      <option value="auto" selected>Auto</option>
+      <option value="3">High</option>
+      <option value="2">Medium</option>
+      <option value="1">Low</option>
+      <option value="0">Minimum</option>
+    </select>
+  </div>
+  <div class="row"><label>Running at</label><span class="val" id="qualityNow" style="min-width:96px">—</span></div>
   <label class="check"><input type="checkbox" id="optVeg" checked> Grass &amp; trees</label>
   <label class="check"><input type="checkbox" id="optBloom" checked> Bloom &amp; glare</label>
   <label class="check"><input type="checkbox" id="optInvert"> Invert pitch axis</label>
-  <div class="row"><label>Render scale</label><input id="scaleSlider" type="range" min="0.5" max="1.5" step="0.05" value="1"><span class="val" id="scaleVal">1.00</span></div>
 
   <button class="btn" id="btnRunway">Reposition on runway (Enter)</button>
   <button class="btn" id="btnApproach">Reposition on approach (Backspace)</button>

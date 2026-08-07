@@ -129,6 +129,64 @@ const ui = {
   hour: 7.6, rate: 30, weather: 'fair', cam: 0,
   bloom: true, veg: true, scale: 1, paused: false, invert: false,
 };
+
+// ---------------------------------------------------------------------------
+// Quality. This runs on everything from an integrated laptop GPU to a desktop
+// card, so rather than guess, the manager watches real frame times and moves
+// between presets until the frame rate is comfortable.
+// ---------------------------------------------------------------------------
+const QUALITY = [
+  { name: 'Minimum', scale: 0.55, bloom: false, veg: false, slabs: 1, weather: 0.3, cirrus: false, msaa: 0 },
+  { name: 'Low', scale: 0.68, bloom: false, veg: true, slabs: 2, weather: 0.5, cirrus: true, msaa: 0 },
+  { name: 'Medium', scale: 0.82, bloom: false, veg: true, slabs: 3, weather: 0.75, cirrus: true, msaa: 0 },
+  { name: 'High', scale: 1.0, bloom: true, veg: true, slabs: 3, weather: 1.0, cirrus: true, msaa: 4 },
+];
+const quality = { level: 2, auto: true, _cooldown: 3, _frames: [], _idx: 0 };
+
+function applyQuality() {
+  const q = QUALITY[quality.level];
+  ui.scale = q.scale;
+  // Multisampling a half-float buffer is bandwidth-hungry; on integrated
+  // graphics it costs more than several of the scene's shaders put together.
+  const msaa = q.msaa;
+  for (const rtName of ['renderTarget1', 'renderTarget2']) {
+    const rt = composer[rtName];
+    if (rt && rt.samples !== msaa) { rt.samples = msaa; rt.dispose(); }
+  }
+  bloomPass.enabled = q.bloom && ui.bloom;
+  vegetation.enabled = q.veg && ui.veg;
+  clouds.setSlabCount(q.slabs);
+  clouds.cirrus.visible = q.cirrus;
+  weather.setQuality(q.weather);
+  resize();
+  const sel = el('qualitySel');
+  if (sel) sel.value = quality.auto ? 'auto' : String(quality.level);
+  const lbl = el('qualityNow');
+  if (lbl) lbl.textContent = q.name + (quality.auto ? ' (auto)' : '');
+}
+
+/** Median of the recent real frame times, in ms. */
+function frameMedian() {
+  const f = quality._frames;
+  if (f.length < 20) return 16;
+  const s = f.slice().sort((a, b) => a - b);
+  return s[s.length >> 1];
+}
+
+function updateQuality(dt) {
+  const f = quality._frames;
+  f[quality._idx++ % 45] = dt * 1000;
+  if (!quality.auto) return;
+  quality._cooldown -= dt;
+  if (quality._cooldown > 0 || f.length < 45) return;
+  const med = frameMedian();
+  if (med > 23 && quality.level > 0) {
+    quality.level--; applyQuality(); quality._cooldown = 2.5; quality._frames.length = 0; quality._idx = 0;
+    toast('Graphics reduced to ' + QUALITY[quality.level].name + ' to keep the frame rate up');
+  } else if (med < 11.5 && quality.level < QUALITY.length - 1) {
+    quality.level++; applyQuality(); quality._cooldown = 6; quality._frames.length = 0; quality._idx = 0;
+  }
+}
 const el = id => document.getElementById(id);
 const audio = new Audio();
 
@@ -205,10 +263,14 @@ function refreshChips() {
 el('timeSlider').addEventListener('input', e => { ui.hour = +e.target.value; atmosphere.dirty = true; });
 el('rateSlider').addEventListener('input', e => { ui.rate = +e.target.value; el('rateVal').textContent = ui.rate + '×'; });
 el('weatherSel').addEventListener('change', e => { ui.weather = e.target.value; weather.setMode(ui.weather); });
-el('optVeg').addEventListener('change', e => { vegetation.enabled = e.target.checked; });
-el('optBloom').addEventListener('change', e => { bloomPass.enabled = e.target.checked; });
+el('optVeg').addEventListener('change', e => { ui.veg = e.target.checked; applyQuality(); });
+el('optBloom').addEventListener('change', e => { ui.bloom = e.target.checked; applyQuality(); });
 el('optInvert').addEventListener('change', e => { controls.invertPitch = e.target.checked; });
-el('scaleSlider').addEventListener('input', e => { ui.scale = +e.target.value; el('scaleVal').textContent = ui.scale.toFixed(2); resize(); });
+el('qualitySel').addEventListener('change', e => {
+  if (e.target.value === 'auto') { quality.auto = true; quality._cooldown = 2; }
+  else { quality.auto = false; quality.level = +e.target.value; }
+  applyQuality();
+});
 el('btnRunway').addEventListener('click', actions.resetRunway);
 el('btnApproach').addEventListener('click', actions.resetApproach);
 el('btnHelp').addEventListener('click', actions.toggleHelp);
@@ -236,14 +298,18 @@ function resize() {
   // the frame loop re-checks and calls back in once the viewport is real.
   const w = Math.max(window.innerWidth, 1), h = Math.max(window.innerHeight, 1);
   lastW = w; lastH = h;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2) * ui.scale;
+  // Cap at 1.5x rather than 2x: this scene is fragment-bound, and rendering a
+  // HiDPI display natively quadruples the most expensive work in the frame.
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5) * ui.scale;
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setPixelRatio(dpr);
   renderer.setSize(w, h, false);
   composer.setPixelRatio(dpr);
   composer.setSize(w, h);
-  bloomPass.resolution.set(w * dpr, h * dpr);
+  // Bloom runs at half resolution — it is a wide blur, so nobody can tell, and
+  // it is one of the heaviest passes on integrated graphics.
+  bloomPass.resolution.set(Math.max(w * dpr * 0.5, 8), Math.max(h * dpr * 0.5, 8));
   const hudDpr = Math.min(window.devicePixelRatio || 1, 2);
   pfd.resize(hudDpr);
   minimap.resize(hudDpr);
@@ -265,6 +331,7 @@ resize();
 }
 setCam(0);
 refreshChips();
+applyQuality();
 
 // ---------------------------------------------------------------------------
 // Frame loop
@@ -278,6 +345,7 @@ let last = performance.now() / 1000;
 let simTime = 0;
 let fps = 60, frames = 0, fpsT = 0;
 let shakePhase = 0;
+let hudClock = 0, mapClock = 0;
 let started = false;
 
 const dayAmb = new THREE.Color(0.30, 0.46, 0.86);
@@ -420,6 +488,7 @@ function frame() {
 
 function tick(dt) {
   if (window.innerWidth !== lastW || window.innerHeight !== lastH) resize();
+  updateQuality(dt);
   frames++; fpsT += dt;
   if (fpsT > 0.5) { fps = frames / fpsT; frames = 0; fpsT = 0; }
 
@@ -451,7 +520,17 @@ function tick(dt) {
   model.position.copy(ac.pos);
   model.quaternion.copy(ac.quat);
   animate737(model, ac, dt, simTime);
-  if (ui.cam === 0) updateCockpit(cockpit, ac, renderer.toneMappingExposure);
+  // The instrument canvases are redrawn on their own slower clocks, and the
+  // cockpit screens only re-upload when the source actually changed — a canvas
+  // upload is one of the most expensive things per frame on integrated GPUs.
+  hudClock += dt;
+  const hudTick = hudClock >= 1 / 30;
+  if (hudTick) hudClock = 0;
+  mapClock += dt;
+  const mapTick = mapClock >= 1 / 10;
+  if (mapTick) mapClock = 0;
+
+  if (ui.cam === 0) updateCockpit(cockpit, ac, renderer.toneMappingExposure, hudTick || mapTick);
 
   updateCamera(dt);
   atmo.uCamPos.value.copy(camera.position);
@@ -482,15 +561,15 @@ function tick(dt) {
     shadow.visible = true;
     shadow.position.set(sx, terrainHeight(sx, sz) + 0.35, sz);
     shadow.rotation.y = -ac.headingDeg * Math.PI / 180;
-    const spread = 1 + ac.agl / 320;
+    const spread = 1 + ac.agl / 900;      // penumbra grows slowly with height
     shadow.scale.set(spread, 1, spread);
     shadow.material.opacity = 0.55 * clamp(1 - ac.agl / 600, 0, 1) * clamp(sunDir.y * 3, 0, 1) * (1 - p.coverage * 0.7);
   } else shadow.visible = false;
 
   // HUD
-  pfd.draw(ac, { fps });
+  if (hudTick) pfd.draw(ac, { fps });
   minimap.tick(ac.pos.x, ac.pos.z);
-  minimap.draw(ac);
+  if (mapTick) minimap.draw(ac);
 
   audio.update(ac, p, dt, ui.cam === 0);
 
@@ -520,7 +599,7 @@ window.addEventListener('pointerdown', () => audio.start(), { once: true });
 window.addEventListener('keydown', () => audio.start(), { once: true });
 
 // Debug handle (also handy from the browser console).
-window.SIM = { ac, ui, actions, controls, renderer, scene, camera, terrain, weather, minimap, tick, setCam, airportsNear };
+window.SIM = { ac, ui, actions, controls, renderer, scene, camera, terrain, weather, minimap, vegetation, clouds, quality, tick, setCam, airportsNear };
 
 el('loadMsg').textContent = 'compiling shaders…';
 requestAnimationFrame(frame);

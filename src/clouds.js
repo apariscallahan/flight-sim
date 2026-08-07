@@ -6,12 +6,12 @@ import { GLSL_ATMO, atmo } from './atmosphere.js';
 // A stack of slabs through the cloud layer. The weight controls how much of the
 // noise field survives at that height, so the deck bulges in the middle and
 // tapers at the top — cumulus rather than a flat sheet.
+// Three slabs rather than five. Each one is a full-screen transparent layer, so
+// they overdraw; this is the most expensive geometry in the scene per pixel.
 const SLABS = [
-  { y: 1500, w: 0.88, o: 0.0 },
-  { y: 1730, w: 1.00, o: 11.3 },
-  { y: 1960, w: 0.86, o: 23.7 },
-  { y: 2200, w: 0.62, o: 37.1 },
-  { y: 2450, w: 0.36, o: 51.9 },
+  { y: 1500, w: 0.92, o: 0.0 },
+  { y: 1810, w: 1.00, o: 17.3 },
+  { y: 2140, w: 0.66, o: 37.1 },
 ];
 
 function cumulusMaterial(slab) {
@@ -65,11 +65,15 @@ function cumulusMaterial(slab) {
         float d = smoothstep(thresh, thresh + 0.085, f);
         if (d < 0.012) discard;
 
-        // fake self shadow: density a little way toward the sun
-        vec2 sunOff = normalize(uSunDir.xz + vec2(0.001)) * 900.0;
-        float fs = cloudField(vWorld.xz + sunOff);
-        float ds = smoothstep(thresh, thresh + 0.085, fs);
-        ds = max(ds, smoothstep(thresh, thresh + 0.085, cloudField(vWorld.xz + sunOff * 2.4)) * 0.65);
+        // Self shadow: how much cloud sits between this point and the sun. The
+        // shadow map already holds exactly that field, so read it instead of
+        // evaluating the noise a second and third time.
+        vec2 sunOff = normalize(uSunDir.xz + vec2(0.001)) * 1400.0;
+        vec2 sUv = (vWorld.xz + sunOff - uCloudShadowRect.xy) / (2.0 * uCloudShadowRect.z) + 0.5;
+        float ds = 0.0;
+        if (sUv.x > 0.0 && sUv.x < 1.0 && sUv.y > 0.0 && sUv.y < 1.0) {
+          ds = (1.0 - texture2D(uCloudShadow, sUv).r) / 0.72;
+        }
         float lit = clamp(1.0 - ds * 0.85, 0.0, 1.0);
         lit = mix(lit, 1.0, clamp(uSunDir.y * 0.8, 0.0, 1.0) * 0.35);
 
@@ -93,10 +97,12 @@ function cumulusMaterial(slab) {
         alpha *= 1.0 - smoothstep(60000.0, 105000.0, dist);
         // a flat slab seen edge-on becomes a hard streak — fade those out
         alpha *= smoothstep(0.015, 0.16, abs(V.y));
-        // and dissolve the slab where it would slice through a mountain
-        if (dist < 45000.0) {
-          float ground = terrainBase(vWorld.xz, 0.0006);
-          alpha *= smoothstep(-120.0, 420.0, uSlabY - ground);
+        // and dissolve the slab where it would slice through a mountain, using
+        // the ground height packed into the shadow map's green channel
+        vec2 gUv = (vWorld.xz - uCloudShadowRect.xy) / (2.0 * uCloudShadowRect.z) + 0.5;
+        if (gUv.x > 0.0 && gUv.x < 1.0 && gUv.y > 0.0 && gUv.y < 1.0) {
+          float ground = texture2D(uCloudShadow, gUv).g * 4000.0;
+          alpha *= smoothstep(-120.0, 460.0, uSlabY - ground);
         }
         col = mix(col, sampleSky(V), clamp(fogAmount(vWorld) * 0.9, 0.0, 1.0));
         gl_FragColor = vec4(col, alpha);
@@ -133,10 +139,10 @@ function cirrusMaterial() {
       void main(){
         #include <logdepthbuf_fragment>
         vec2 p = vWorld.xz + vec2(uTime * 22.0, uTime * 7.0);
-        float warp = fbmW(p, 0.000030, 3, 1e9);
+        float warp = fbmW(p, 0.000030, 2, 1e9);
         vec2 q = p + vec2(warp * 15000.0, warp * 4000.0);
         // stretched along one axis so the sheets read as wind-blown cirrus
-        float n = fbmW(vec2(q.x * 0.30, q.y), 0.00013, 5, 1e9);
+        float n = fbmW(vec2(q.x * 0.30, q.y), 0.00013, 4, 1e9);
         float d = smoothstep(0.16, 0.72, n * 0.5 + 0.5) * uAmount;
         if (d < 0.01) discard;
         vec3 V = normalize(vWorld - uCamPos);
@@ -152,10 +158,10 @@ function cirrusMaterial() {
 const CLOUD_FIELD_GLSL = /* glsl */`
 float cloudFieldRaw(vec2 p, vec2 wind, float t){
   p += wind * t;
-  float warp = fbmW(p + 913.0, 0.00011, 3, 1e9);
+  float warp = fbmW(p + 913.0, 0.00011, 2, 1e9);
   p += vec2(warp * 2600.0, warp * 1700.0);
-  float n = fbmW(p, 0.00026, 4, 1e9);
-  n += fbmW(p, 0.00160, 3, 1e9) * 0.26;
+  float n = fbmW(p, 0.00026, 3, 1e9);
+  n += fbmW(p, 0.00160, 2, 1e9) * 0.26;
   return n * 0.5 + 0.5;
 }
 `;
@@ -189,6 +195,8 @@ export class CloudShadowMap {
         uWind: { value: new THREE.Vector2(6, 2) },
         uTime: atmo.uTime,
         uStrength: { value: 0.72 },
+        uApData: { value: Array.from({ length: MAX_AIRPORTS }, () => new THREE.Vector4()) },
+        uApCount: { value: 0 },
       },
       depthTest: false, depthWrite: false,
       vertexShader: `
@@ -200,13 +208,18 @@ export class CloudShadowMap {
         uniform vec2 uCentre; uniform float uHalf, uCoverage, uTime, uStrength;
         uniform vec2 uWind;
         ${GLSL_NOISE}
+        ${GLSL_TERRAIN}
         ${CLOUD_FIELD_GLSL}
         void main(){
           vec2 p = uCentre + (vUv - 0.5) * 2.0 * uHalf;
           float n = cloudFieldRaw(p, uWind, uTime);
           float thresh = 1.0 - uCoverage;
           float d = smoothstep(thresh, thresh + 0.085, n);
-          gl_FragColor = vec4(vec3(1.0 - d * uStrength), 1.0);
+          // G carries a coarse ground height so the cloud slabs can dissolve
+          // where they would otherwise slice through a mountain, without each
+          // of them having to evaluate the terrain per pixel.
+          float g = clamp(terrainBase(p, 0.0028) / 4000.0, 0.0, 1.0);
+          gl_FragColor = vec4(1.0 - d * uStrength, g, 0.0, 1.0);
         }`,
     });
     this.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat));
@@ -265,8 +278,14 @@ export class Clouds {
     this.cirrus.material.uniforms.uAmount.value = cirrus;
   }
 
+  /** Drop the outer slabs on weak hardware — they are pure overdraw. */
+  setSlabCount(n) {
+    this.slabs.forEach((s, i) => { s.mesh.visible = i < n; });
+  }
+
   update(cam) {
     for (const s of this.slabs) {
+      if (!s.mesh.visible) continue;
       s.mesh.position.x = cam.x; s.mesh.position.z = cam.z;
       // draw the deck we are under before/after depending on which side we sit
       s.mesh.renderOrder = cam.y > s.y ? 20 - s.y * 0.001 : 20 + s.y * 0.001;

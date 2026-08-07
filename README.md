@@ -173,6 +173,7 @@ for the full list.
 | Look around | drag with the mouse |
 | Mouse as yoke | `M` |
 | Map range | `Z` / `X` |
+| Graphics preset | the panel on the right (defaults to Auto) |
 | Reposition | `Enter` on a runway · `Backspace` on approach |
 | Pause · help | `P` · `H` |
 
@@ -205,8 +206,28 @@ src/
   audio.js          synthesised engine, wind, rain
 ```
 
-## Performance notes
+## Performance
 
-Terrain detail, vegetation density and cloud sampling are all distance-gated,
-and the vegetation rebuilds are spread across frames. If it runs hot, the
-settings panel has a render scale slider and toggles for bloom and vegetation.
+The graphics setting defaults to **Auto**: the frame loop keeps a rolling median
+of real frame times and moves between four presets until the frame rate is
+comfortable, so it self-tunes to whatever machine it lands on. You can pin a
+preset from the panel if you prefer.
+
+The presets trade off render scale, multisampling, bloom, the number of cloud
+layers, vegetation and precipitation density.
+
+If you are modifying this and want to know where the time goes, measure with
+`EXT_disjoint_timer_query_webgl2` rather than wall-clock timing around
+`gl.finish()` — the latter reports nonsense when the page is not compositing.
+`window.SIM` exposes the renderer, scene and subsystems for exactly this.
+
+Things that turned out to matter far more than expected, on a 2017-era
+integrated GPU:
+
+| | |
+|---|---|
+| Evaluating terrain height three times per vertex (for the normal) | the single largest cost in the renderer — the fragment shader recovers the normal from derivatives instead |
+| Five stacked full-screen cloud layers | each one re-evaluated the noise field three times per pixel; now three layers that read the shadow map instead |
+| Re-uploading the instrument canvases to the GPU every frame | ~2.2 MB/frame, more than the rest of the scene put together |
+| 4× multisampling on a half-float target | pure memory bandwidth; only enabled on the top preset |
+| Placing tree impostors in one pass | ~13 000 terrain queries in a single frame, which is exactly what a stutter looks like — now spread across frames with a time budget |

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLSL_NOISE, hash2, snoise } from './noise.js';
 import { GLSL_ATMO, atmo } from './atmosphere.js';
-import { terrainHeight, terrainNormal, climate, airportInfluence, isPaved, clamp, smoothstep } from './terrainCommon.js';
+import { terrainHeight, climate, airportInfluence, isPaved, clamp, smoothstep } from './terrainCommon.js';
 import { makeLitMaterial } from './litMaterial.js';
 
 // ---------------------------------------------------------------------------
@@ -9,12 +9,19 @@ import { makeLitMaterial } from './litMaterial.js';
 // ---------------------------------------------------------------------------
 
 const NONE = 0, CONIFER = 1, BROADLEAF = 2, PALM = 3, SHRUB = 4;
+const TREE_KINDS = [CONIFER, BROADLEAF, PALM, SHRUB];
 
 function siteInfo(x, z) {
   const h = terrainHeight(x, z);
   if (h < 1.2) return null;
-  const n = terrainNormal(x, z, 4.0);
-  if (n.y < 0.80) return null;
+  // Forward differences rather than a full central-difference normal: two extra
+  // terrain evaluations instead of four, and this runs tens of thousands of
+  // times per rebuild.
+  const e = 4.0;
+  const sx = (h - terrainHeight(x + e, z)) / e;
+  const sz = (h - terrainHeight(x, z + e)) / e;
+  const ny = 1 / Math.sqrt(1 + sx * sx + sz * sz);
+  if (ny < 0.80) return null;
   const cl = climate(x, z);
   const ap = airportInfluence(x, z);
   if (ap > 0.32) return null;              // airports keep their approach clear
@@ -33,7 +40,7 @@ function siteInfo(x, z) {
   else if (cl.t > 0.16) type = CONIFER;
   else type = h < treeline * 0.5 ? CONIFER : SHRUB;
 
-  return { h, n, cl, ap, density, type };
+  return { h, ny, cl, ap, density, type };
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +531,7 @@ export class Vegetation {
     this._q = new THREE.Quaternion();
     this._v = new THREE.Vector3();
     this._s = new THREE.Vector3();
+    this.job = null;
   }
 
   setWind(strength, dirRad) {
@@ -538,147 +546,194 @@ export class Vegetation {
       this.grass.count = 0;
       for (const k in this.trees) this.trees[k].count = 0;
       for (const k in this.imp) this.imp[k].geo.instanceCount = 0;
+      this.job = null;
       return;
     }
     const x = cam.x, z = cam.z;
-    if (agl < 90 && Math.hypot(x - this._grassAt.x, z - this._grassAt.y) > 6) {
-      this._grassAt.set(x, z);
-      this.rebuildGrass(x, z);
-    } else if (agl >= 90) this.grass.count = 0;
+    if (agl >= 90) this.grass.count = 0;
+    if (agl >= 500) for (const k in this.trees) this.trees[k].count = 0;
+    if (agl >= 3200) for (const k in this.imp) this.imp[k].geo.instanceCount = 0;
 
-    if (agl < 500 && Math.hypot(x - this._treeAt.x, z - this._treeAt.y) > 40) {
-      this._treeAt.set(x, z);
-      this.rebuildTrees(x, z);
-    } else if (agl >= 500) for (const k in this.trees) this.trees[k].count = 0;
-
-    if (agl < 3200 && Math.hypot(x - this._impAt.x, z - this._impAt.y) > 220) {
-      this._impAt.set(x, z);
-      this.rebuildImpostors(x, z);
-    } else if (agl >= 3200) for (const k in this.imp) this.imp[k].geo.instanceCount = 0;
+    // One rebuild at a time, and it is spread over as many frames as it needs.
+    // Doing a whole placement pass in a single frame means tens of thousands of
+    // terrain evaluations at once, which shows up as a hitch every few seconds.
+    if (!this.job) {
+      if (agl < 90 && Math.hypot(x - this._grassAt.x, z - this._grassAt.y) > 6) {
+        this._grassAt.set(x, z);
+        this.job = this.startGrass(x, z);
+      } else if (agl < 500 && Math.hypot(x - this._treeAt.x, z - this._treeAt.y) > 40) {
+        this._treeAt.set(x, z);
+        this.job = this.startTrees(x, z);
+      } else if (agl < 3200 && Math.hypot(x - this._impAt.x, z - this._impAt.y) > 220) {
+        this._impAt.set(x, z);
+        this.job = this.startImpostors(x, z);
+      }
+    }
+    if (this.job) {
+      const t0 = performance.now();
+      while (this.job && performance.now() - t0 < 1.6) {
+        if (!this.job.step()) { this.job.finish(); this.job = null; }
+      }
+    }
   }
 
-  rebuildGrass(cx, cz) {
+  // Each placement pass is a job that consumes one row of its grid per call, so
+  // the frame loop can stop whenever it has spent its budget. Instances written
+  // so far stay visible: the count only shrinks once the pass completes, which
+  // means the old placement keeps drawing until the new one has overtaken it.
+
+  startGrass(cx, cz) {
+    const self = this;
     const m = this._m, q = this._q, v = this._v, s = this._s;
     const col = this.grass.instanceColor.array;
-    let n = 0;
     const step = (GRASS_R * 2) / Math.sqrt(GRASS_N / 0.78);
-    for (let gz = -GRASS_R; gz <= GRASS_R && n < GRASS_N; gz += step) {
-      for (let gx = -GRASS_R; gx <= GRASS_R && n < GRASS_N; gx += step) {
-        const jx = (hash2(Math.round((cx + gx) * 3), Math.round((cz + gz) * 3)) - 0.5) * step * 1.5;
-        const jz = (hash2(Math.round((cz + gz) * 5) + 71, Math.round((cx + gx) * 5) + 13) - 0.5) * step * 1.5;
-        const wx = cx + gx + jx, wz = cz + gz + jz;
-        if (Math.hypot(wx - cx, wz - cz) > GRASS_R) continue;
-        const h = terrainHeight(wx, wz);
-        if (h < 0.6) continue;
-        if (isPaved(wx, wz)) continue;
-        const nrm = terrainNormal(wx, wz, 2.5);
-        if (nrm.y < 0.72) continue;
-        const cl = climate(wx, wz);
-        const treeline = 320 + cl.t * 3100;
-        if (h > treeline + 400) continue;
-        const dry = smoothstep(0.06, 0.30, cl.m);
-        if (dry < 0.12) continue;
+    const prev = this.grass.count;
+    let n = 0, gz = -GRASS_R;
+    return {
+      step() {
+        if (gz > GRASS_R || n >= GRASS_N) return false;
+        for (let gx = -GRASS_R; gx <= GRASS_R && n < GRASS_N; gx += step) {
+          const jx = (hash2(Math.round((cx + gx) * 3), Math.round((cz + gz) * 3)) - 0.5) * step * 1.5;
+          const jz = (hash2(Math.round((cz + gz) * 5) + 71, Math.round((cx + gx) * 5) + 13) - 0.5) * step * 1.5;
+          const wx = cx + gx + jx, wz = cz + gz + jz;
+          if (Math.hypot(wx - cx, wz - cz) > GRASS_R) continue;
+          const h = terrainHeight(wx, wz);
+          if (h < 0.6) continue;
+          if (isPaved(wx, wz)) continue;
+          const e = 2.5;
+          const sx = (h - terrainHeight(wx + e, wz)) / e;
+          const sz = (h - terrainHeight(wx, wz + e)) / e;
+          if (1 / Math.sqrt(1 + sx * sx + sz * sz) < 0.72) continue;
+          const cl = climate(wx, wz);
+          if (h > 320 + cl.t * 3100 + 400) continue;
+          const dry = smoothstep(0.06, 0.30, cl.m);
+          if (dry < 0.12) continue;
 
-        const r = hash2(Math.round(wx * 11), Math.round(wz * 7));
-        const scale = (0.75 + r * 0.7) * (0.6 + dry * 0.6);
-        v.set(wx, h - 0.05, wz);
-        q.setFromAxisAngle(UP, r * 6.283);
-        s.set(scale, scale * (0.7 + dry * 0.6), scale);
-        m.compose(v, q, s);
-        this.grass.setMatrixAt(n, m);
+          const r = hash2(Math.round(wx * 11), Math.round(wz * 7));
+          const scale = (0.75 + r * 0.7) * (0.6 + dry * 0.6);
+          v.set(wx, h - 0.05, wz);
+          q.setFromAxisAngle(UP, r * 6.283);
+          s.set(scale, scale * (0.7 + dry * 0.6), scale);
+          m.compose(v, q, s);
+          self.grass.setMatrixAt(n, m);
 
-        // biome tint
-        const lush = smoothstep(0.25, 0.7, cl.m);
-        const warm = smoothstep(0.5, 0.85, cl.t);
-        const cr = 0.30 + 0.34 * (1 - lush) + warm * 0.16;
-        const cg = 0.30 + 0.34 * lush + 0.06;
-        const cb = 0.10 + 0.10 * lush;
-        const jitter = 0.85 + r * 0.35;
-        col[n * 3] = cr * jitter; col[n * 3 + 1] = cg * jitter; col[n * 3 + 2] = cb * jitter;
-        n++;
-      }
-    }
-    this.grass.count = n;
-    this.grass.instanceMatrix.needsUpdate = true;
-    this.grass.instanceColor.needsUpdate = true;
+          const lush = smoothstep(0.25, 0.7, cl.m);
+          const warm = smoothstep(0.5, 0.85, cl.t);
+          const jitter = 0.85 + r * 0.35;
+          col[n * 3] = (0.30 + 0.34 * (1 - lush) + warm * 0.16) * jitter;
+          col[n * 3 + 1] = (0.36 + 0.34 * lush) * jitter;
+          col[n * 3 + 2] = (0.10 + 0.10 * lush) * jitter;
+          n++;
+        }
+        gz += step;
+        self.grass.count = Math.max(prev, n);
+        return true;
+      },
+      finish() {
+        self.grass.count = n;
+        self.grass.instanceMatrix.needsUpdate = true;
+        self.grass.instanceColor.needsUpdate = true;
+      },
+    };
   }
 
-  rebuildTrees(cx, cz) {
+  startTrees(cx, cz) {
+    const self = this;
     const m = this._m, q = this._q, v = this._v, s = this._s;
     const counts = { [CONIFER]: 0, [BROADLEAF]: 0, [PALM]: 0, [SHRUB]: 0 };
+    const prev = {};
+    for (const k of TREE_KINDS) prev[k] = this.trees[k].count;
     const step = 7.5;
-    for (let gz = -NEAR_R; gz <= NEAR_R; gz += step) {
-      for (let gx = -NEAR_R; gx <= NEAR_R; gx += step) {
-        const wx = cx + gx, wz = cz + gz;
-        const cellx = Math.round(wx / step), cellz = Math.round(wz / step);
-        const r1 = hash2(cellx, cellz);
-        const jx = (hash2(cellx + 999, cellz) - 0.5) * step * 1.2;
-        const jz = (hash2(cellx, cellz + 777) - 0.5) * step * 1.2;
-        const px = cellx * step + jx, pz = cellz * step + jz;
-        const d = Math.hypot(px - cx, pz - cz);
-        if (d > NEAR_R) continue;
-        const info = siteInfo(px, pz);
-        if (!info || r1 > info.density * 0.95) continue;
-        const im = this.trees[info.type];
-        if (counts[info.type] >= im.instanceMatrix.count) continue;
-        const r2 = hash2(cellx + 31, cellz + 57);
-        const sc = (0.6 + r2 * 0.8) * (info.type === PALM ? 0.85 : 1.0);
-        v.set(px, info.h - 0.2, pz);
-        q.setFromAxisAngle(UP, r2 * 6.283);
-        s.set(sc, sc * (0.85 + r1 * 0.4), sc);
-        m.compose(v, q, s);
-        im.setMatrixAt(counts[info.type], m);
-        const lush = smoothstep(0.30, 0.75, info.cl.m);
-        const tint = im.instanceColor.array;
-        const n = counts[info.type];
-        const j = 0.72 + r1 * 0.62;
-        tint[n * 3] = j * (1.18 - lush * 0.34);
-        tint[n * 3 + 1] = j * (0.86 + lush * 0.30);
-        tint[n * 3 + 2] = j * (0.80 - lush * 0.20);
-        counts[info.type]++;
-      }
-    }
-    for (const k of [CONIFER, BROADLEAF, PALM, SHRUB]) {
-      this.trees[k].count = counts[k];
-      this.trees[k].instanceMatrix.needsUpdate = true;
-      this.trees[k].instanceColor.needsUpdate = true;
-    }
+    let gz = -NEAR_R;
+    return {
+      step() {
+        if (gz > NEAR_R) return false;
+        for (let gx = -NEAR_R; gx <= NEAR_R; gx += step) {
+          const cellx = Math.round((cx + gx) / step), cellz = Math.round((cz + gz) / step);
+          const r1 = hash2(cellx, cellz);
+          const px = cellx * step + (hash2(cellx + 999, cellz) - 0.5) * step * 1.2;
+          const pz = cellz * step + (hash2(cellx, cellz + 777) - 0.5) * step * 1.2;
+          if (Math.hypot(px - cx, pz - cz) > NEAR_R) continue;
+          const info = siteInfo(px, pz);
+          if (!info || r1 > info.density * 0.95) continue;
+          const im = self.trees[info.type];
+          const n = counts[info.type];
+          if (n >= im.instanceMatrix.count) continue;
+          const r2 = hash2(cellx + 31, cellz + 57);
+          const sc = (0.6 + r2 * 0.8) * (info.type === PALM ? 0.85 : 1.0);
+          v.set(px, info.h - 0.2, pz);
+          q.setFromAxisAngle(UP, r2 * 6.283);
+          s.set(sc, sc * (0.85 + r1 * 0.4), sc);
+          m.compose(v, q, s);
+          im.setMatrixAt(n, m);
+          const lush = smoothstep(0.30, 0.75, info.cl.m);
+          const tint = im.instanceColor.array;
+          const j = 0.72 + r1 * 0.62;
+          tint[n * 3] = j * (1.18 - lush * 0.34);
+          tint[n * 3 + 1] = j * (0.86 + lush * 0.30);
+          tint[n * 3 + 2] = j * (0.80 - lush * 0.20);
+          counts[info.type]++;
+        }
+        gz += step;
+        for (const k of TREE_KINDS) self.trees[k].count = Math.max(prev[k], counts[k]);
+        return true;
+      },
+      finish() {
+        for (const k of TREE_KINDS) {
+          self.trees[k].count = counts[k];
+          self.trees[k].instanceMatrix.needsUpdate = true;
+          self.trees[k].instanceColor.needsUpdate = true;
+        }
+      },
+    };
   }
 
-  rebuildImpostors(cx, cz) {
+  startImpostors(cx, cz) {
+    const self = this;
     const counts = { [CONIFER]: 0, [BROADLEAF]: 0, [PALM]: 0, [SHRUB]: 0 };
-    const step = 26;
-    for (let gz = -IMP_R; gz <= IMP_R; gz += step) {
-      for (let gx = -IMP_R; gx <= IMP_R; gx += step) {
-        const cellx = Math.round((cx + gx) / step), cellz = Math.round((cz + gz) / step);
-        const r1 = hash2(cellx * 3 + 1, cellz * 3 + 2);
-        const px = cellx * step + (hash2(cellx + 5, cellz + 9) - 0.5) * step * 1.4;
-        const pz = cellz * step + (hash2(cellx + 19, cellz + 3) - 0.5) * step * 1.4;
-        const d = Math.hypot(px - cx, pz - cz);
-        if (d > IMP_R || d < NEAR_R * 0.55) continue;
-        const info = siteInfo(px, pz);
-        if (!info || r1 > info.density) continue;
-        const slot = this.imp[info.type];
-        const n = counts[info.type];
-        if (n >= slot.cap) continue;
-        const r2 = hash2(cellx + 61, cellz + 13);
-        const hgt = (info.type === SHRUB ? 2.2 : info.type === PALM ? 11 : 13) * (0.7 + r2 * 0.6);
-        const wid = hgt * (info.type === CONIFER ? 0.52 : 0.85);
-        slot.geo.attributes.aPos.setXYZ(n, px, info.h - 0.3, pz);
-        slot.geo.attributes.aScale.setXY(n, wid, hgt);
-        const lush = smoothstep(0.3, 0.75, info.cl.m);
-        const t = 0.80 + r2 * 0.4;
-        slot.geo.attributes.aTint.setXYZ(n, t * (1.05 - lush * 0.28), t * (0.86 + lush * 0.22), t * 0.62);
-        counts[info.type]++;
-      }
-    }
-    for (const k of [CONIFER, BROADLEAF, PALM, SHRUB]) {
-      const slot = this.imp[k];
-      slot.geo.instanceCount = counts[k];
-      slot.geo.attributes.aPos.needsUpdate = true;
-      slot.geo.attributes.aScale.needsUpdate = true;
-      slot.geo.attributes.aTint.needsUpdate = true;
-    }
+    const prev = {};
+    for (const k of TREE_KINDS) prev[k] = this.imp[k].geo.instanceCount;
+    const step = 30;
+    let gz = -IMP_R;
+    return {
+      step() {
+        if (gz > IMP_R) return false;
+        for (let gx = -IMP_R; gx <= IMP_R; gx += step) {
+          const cellx = Math.round((cx + gx) / step), cellz = Math.round((cz + gz) / step);
+          const r1 = hash2(cellx * 3 + 1, cellz * 3 + 2);
+          const px = cellx * step + (hash2(cellx + 5, cellz + 9) - 0.5) * step * 1.4;
+          const pz = cellz * step + (hash2(cellx + 19, cellz + 3) - 0.5) * step * 1.4;
+          const d = Math.hypot(px - cx, pz - cz);
+          if (d > IMP_R || d < NEAR_R * 0.55) continue;
+          const info = siteInfo(px, pz);
+          if (!info || r1 > info.density) continue;
+          const slot = self.imp[info.type];
+          const n = counts[info.type];
+          if (n >= slot.cap) continue;
+          const r2 = hash2(cellx + 61, cellz + 13);
+          const hgt = (info.type === SHRUB ? 2.2 : info.type === PALM ? 11 : 13) * (0.7 + r2 * 0.6);
+          const wid = hgt * (info.type === CONIFER ? 0.52 : 0.85);
+          slot.geo.attributes.aPos.setXYZ(n, px, info.h - 0.3, pz);
+          slot.geo.attributes.aScale.setXY(n, wid, hgt);
+          const lush = smoothstep(0.3, 0.75, info.cl.m);
+          const t = 0.80 + r2 * 0.4;
+          slot.geo.attributes.aTint.setXYZ(n, t * (1.05 - lush * 0.28), t * (0.86 + lush * 0.22), t * 0.62);
+          counts[info.type]++;
+        }
+        gz += step;
+        for (const k of TREE_KINDS) self.imp[k].geo.instanceCount = Math.max(prev[k], counts[k]);
+        return true;
+      },
+      finish() {
+        for (const k of TREE_KINDS) {
+          const slot = self.imp[k];
+          slot.geo.instanceCount = counts[k];
+          slot.geo.attributes.aPos.needsUpdate = true;
+          slot.geo.attributes.aScale.needsUpdate = true;
+          slot.geo.attributes.aTint.needsUpdate = true;
+        }
+      },
+    };
   }
 }
 

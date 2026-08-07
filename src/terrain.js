@@ -3,9 +3,11 @@ import { GLSL_NOISE } from './noise.js';
 import { GLSL_TERRAIN, MAX_AIRPORTS } from './terrainCommon.js';
 import { GLSL_ATMO, atmo } from './atmosphere.js';
 
-const G = 128;          // cells across one clipmap level
+// A coarser grid with more rings covers the same ground for a quarter of the
+// vertices: cost goes as G^2 per level but only log2 in the number of levels.
+const G = 96;           // cells across one clipmap level
 const S0 = 2.0;         // finest cell size, metres
-const LEVELS = 10;      // -> 2 * 2^9 * 128 = 131 km across
+const LEVELS = 10;      // -> 2 * 2^9 * 96 = 98 km across
 const MORPH_START = 0.62;
 
 export const TERRAIN_RADIUS = S0 * Math.pow(2, LEVELS - 1) * G * 0.5;
@@ -54,7 +56,6 @@ uniform float uLevelBias;
 uniform vec3  uCamPos;
 
 varying vec3 vWorld;
-varying vec3 vNormal;
 varying vec2 vClimate;
 varying float vApT;
 varying float vDist;
@@ -90,15 +91,15 @@ void main(){
   float camDist = distance(world, uCamPos.xz);
   float mf = min(1.0 / (0.05 * camDist + 6.0), uMaxFreq);
 
-  float e = max(uSpacing, 1.0);
-  float h  = terrainHeight(world, mf);
-  float hx = terrainHeight(world + vec2(e, 0.0), mf);
-  float hz = terrainHeight(world + vec2(0.0, e), mf);
+  // Exactly one height evaluation per vertex. The surface normal is recovered in
+  // the fragment shader from screen-space derivatives, which is nearly free and
+  // saves two more full terrain evaluations here — this was the single most
+  // expensive thing in the renderer.
+  float h = terrainHeight(world, mf);
 
   // Coarser rings sit fractionally lower so the finer ring always wins in the
   // overlap band. Sub-metre at ring scale, invisible at the distances involved.
   vWorld = vec3(world.x, h - uLevelBias, world.y);
-  vNormal = normalize(vec3(h - hx, e, h - hz));
   vClimate = climate(world);
   vApT = airportInfluence(world);
   vDist = distance(vWorld, uCamPos);
@@ -116,7 +117,6 @@ ${GLSL_NOISE}
 ${GLSL_ATMO}
 
 varying vec3 vWorld;
-varying vec3 vNormal;
 varying vec2 vClimate;
 varying float vApT;
 varying float vDist;
@@ -136,29 +136,34 @@ const vec3 C_SEABED   = vec3(0.30, 0.31, 0.26);
 
 void main(){
   #include <logdepthbuf_fragment>
-  vec3 Ng = normalize(vNormal);       // geometric normal — drives biome decisions
+  // Geometric normal straight from the interpolated surface — no extra terrain
+  // evaluations needed, and the bump detail below hides the faceting.
+  vec3 Ng = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+  if (Ng.y < 0.0) Ng = -Ng;
   vec3 N = Ng;                        // shading normal — gets fine bump detail
   float temp = vClimate.x, moist = vClimate.y;
   float h = vWorld.y;
 
-  // Micro relief expressed as real bump heights (metres) so the slope it adds
-  // stays physical instead of flattening the terrain into a maze pattern.
-  float detFade = 1.0 - smoothstep(140.0, 900.0, vDist);
+  // Bump detail whose feature size follows viewing distance. One band covers
+  // every range, so the terrain keeps texture from the cockpit window out to the
+  // horizon and the flat-shaded facets never read as facets.
+  float bs = clamp(vDist * 0.011, 1.1, 160.0);
+  float bf = 0.42 / bs;
+  float b0 = snoise(vWorld.xz * bf);
+  float bx = snoise((vWorld.xz + vec2(bs, 0.0)) * bf);
+  float bz = snoise((vWorld.xz + vec2(0.0, bs)) * bf);
+  N += vec3(b0 - bx, 0.0, b0 - bz) * 0.19;
+
+  // A second, finer band close in, where there are pixels to spare for it.
+  float detFade = 1.0 - smoothstep(140.0, 700.0, vDist);
   if (detFade > 0.01){
-    float e = 1.2, amp = 0.20 * detFade;
-    float n0 = snoise(vWorld.xz * 0.35);
-    float nx = snoise((vWorld.xz + vec2(e, 0.0)) * 0.35);
-    float nz = snoise((vWorld.xz + vec2(0.0, e)) * 0.35);
-    N = normalize(N + vec3(n0 - nx, 0.0, n0 - nz) * (amp / e));
+    float e2 = 1.1, amp2 = 0.19 * detFade;
+    float m0 = snoise(vWorld.xz * 0.38);
+    float mx = snoise((vWorld.xz + vec2(e2, 0.0)) * 0.38);
+    float mz = snoise((vWorld.xz + vec2(0.0, e2)) * 0.38);
+    N += vec3(m0 - mx, 0.0, m0 - mz) * (amp2 / e2);
   }
-  float midFade = 1.0 - smoothstep(700.0, 5200.0, vDist);
-  if (midFade > 0.01){
-    float e = 14.0, amp = 2.4 * midFade;
-    float n0 = snoise(vWorld.xz * 0.028);
-    float nx = snoise((vWorld.xz + vec2(e, 0.0)) * 0.028);
-    float nz = snoise((vWorld.xz + vec2(0.0, e)) * 0.028);
-    N = normalize(N + vec3(n0 - nx, 0.0, n0 - nz) * (amp / e));
-  }
+  N = normalize(N);
 
   // --- biome albedo -------------------------------------------------------
   vec3 warm = mix(C_DUNE, C_SAVANNA, smoothstep(0.12, 0.42, moist));
@@ -169,22 +174,21 @@ void main(){
   vec3 albedo = mix(cool, temperate, smoothstep(0.24, 0.48, temp));
   albedo = mix(albedo, warm, smoothstep(0.56, 0.80, temp));
 
-  // macro mottleiness
-  float macro = fbmW(vWorld.xz, 0.00065, 4, 1e9);
-  albedo *= 0.84 + 0.34 * (macro * 0.5 + 0.5);
-  float mottle = fbmW(vWorld.xz + 500.0, 0.0042, 3, 1e9) * 0.5 + 0.5;
-  albedo = mix(albedo, albedo * vec3(1.12, 1.06, 0.86), mottle * 0.35);
+  // Two noise fields drive every bit of ground variation below — macro
+  // patchiness, field-scale mottling, canopy clumping, rock and snow. Sampling
+  // each scale once and re-reading it is far cheaper than a call per effect.
+  float macro = fbmW(vWorld.xz, 0.00065, 3, 1e9) * 0.5 + 0.5;
+  float medCap = 1.0 / (0.020 * vDist + 0.8);
+  float med = fbmW(vWorld.xz + 77.0, 0.011, 3, medCap) * 0.5 + 0.5;
 
-  // medium-scale ground variation (fields, scrub, dry patches)
-  float medFreqCap = 1.0 / (0.020 * vDist + 0.8);
-  float med = fbmW(vWorld.xz + 77.0, 0.011, 4, medFreqCap) * 0.5 + 0.5;
-  albedo *= 0.82 + 0.34 * med;
+  albedo *= 0.72 + 0.34 * macro + 0.30 * med;
+  albedo = mix(albedo, albedo * vec3(1.12, 1.06, 0.86), macro * 0.35);
   albedo = mix(albedo, albedo * vec3(0.86, 1.08, 0.80), smoothstep(0.45, 0.9, med) * 0.5);
 
   // close-range grain
   if (detFade > 0.01){
-    float grain = snoise(vWorld.xz * 1.7) * 0.5 + snoise(vWorld.xz * 0.21) * 0.5;
-    albedo *= 1.0 + grain * 0.22 * detFade;
+    float grain = snoise(vWorld.xz * 1.7);
+    albedo *= 1.0 + grain * 0.18 * detFade;
   }
 
   float slope = 1.0 - Ng.y;
@@ -195,28 +199,29 @@ void main(){
   float canopy = smoothstep(0.12, 0.42, moist)
                * smoothstep(treeline, treeline - 700.0, h)
                * smoothstep(1.5, 9.0, h)
-               * smoothstep(0.78, 0.90, Ng.y)
+               * smoothstep(0.72, 0.88, Ng.y)
                * smoothstep(0.02, 0.10, temp)
                * (0.55 + 0.45 * smoothstep(0.30, 0.75, moist))
                * (1.0 - vApT);
   if (canopy > 0.008){
-    float mf = 1.0 / (0.020 * vDist + 1.2);
-    float lump  = fbmW(vWorld.xz, 0.085, 3, mf) * 0.5 + 0.5;
-    float mottley = fbmW(vWorld.xz + 311.0, 0.0035, 4, 1e9) * 0.5 + 0.5;
+    float lump = fbmW(vWorld.xz, 0.085, 2, 1.0 / (0.020 * vDist + 1.2)) * 0.5 + 0.5;
     vec3 treeCol = mix(vec3(0.085, 0.185, 0.075), vec3(0.155, 0.295, 0.115), lump);
     treeCol = mix(treeCol, vec3(0.215, 0.255, 0.115), smoothstep(0.58, 0.86, temp));
     treeCol = mix(treeCol, vec3(0.115, 0.185, 0.125), smoothstep(0.40, 0.16, temp));
-    float cover = canopy * smoothstep(0.30, 0.62, mottley);
+    float cover = canopy * smoothstep(0.28, 0.60, macro * 0.5 + med * 0.5);
     albedo = mix(albedo, treeCol * (0.72 + 0.55 * lump), clamp(cover, 0.0, 1.0) * 0.92);
-    N = normalize(N + vec3((lump - 0.5), 0.0, (mottley - 0.5)) * cover * 0.55);
+    N = normalize(N + vec3(lump - 0.5, 0.0, med - 0.5) * cover * 0.55);
   }
 
-  // rock on steep slopes
+  // rock on steep slopes — height folded into the sample coordinate so cliff
+  // faces don't smear vertically
   float rockAmt = smoothstep(0.16, 0.42, slope);
-  // fold height into the sample coordinate so cliff faces don't smear vertically
-  vec2 rockP = vec2(vWorld.x + vWorld.y * 0.85, vWorld.z - vWorld.y * 0.85);
-  vec3 rock = mix(C_ROCK, C_ROCK2, fbmW(rockP, 0.013, 3, 1e9) * 0.5 + 0.5);
-  rock *= 0.8 + 0.4 * (fbmW(rockP + 99.0, 0.11, 2, 1e9) * 0.5 + 0.5);
+  vec3 rock = C_ROCK;
+  if (rockAmt > 0.004){
+    vec2 rockP = vec2(vWorld.x + vWorld.y * 0.85, vWorld.z - vWorld.y * 0.85);
+    rock = mix(C_ROCK, C_ROCK2, fbmW(rockP, 0.013, 2, 1e9) * 0.5 + 0.5);
+    rock *= 0.82 + 0.36 * med;
+  }
   albedo = mix(albedo, rock, rockAmt);
 
   // beaches
@@ -226,19 +231,19 @@ void main(){
   // seabed
   albedo = mix(albedo, C_SEABED, smoothstep(0.0, -12.0, h));
 
-  // snow: altitude + climate driven, plus weather accumulation
-  float snowAlt = 260.0 + temp * 4200.0;
-  float snowN = fbmW(vWorld.xz, 0.0016, 3, 1e9) * 260.0;
-  float snowAmt = smoothstep(snowAlt + snowN, snowAlt + snowN + 320.0, h);
+  // snow: altitude + climate driven, plus weather accumulation. The snowline
+  // wobble reuses the macro field rather than sampling another octave.
+  float snowAlt = 260.0 + temp * 4200.0 + (macro - 0.5) * 520.0;
+  float snowAmt = smoothstep(snowAlt, snowAlt + 320.0, h);
   snowAmt = max(snowAmt, uSnowCover * smoothstep(0.62, 0.95, Ng.y) * step(0.5, h));
   snowAmt *= smoothstep(0.30, 0.62, Ng.y);
   snowAmt *= 1.0 - beach * 0.8;
-  vec3 snow = C_SNOW * (0.92 + 0.16 * (fbmW(vWorld.xz, 0.02, 2, 1e9) * 0.5 + 0.5));
+  vec3 snow = C_SNOW * (0.92 + 0.16 * med);
   albedo = mix(albedo, snow, clamp(snowAmt, 0.0, 1.0));
 
   // mown airfield grass
   vec3 field = mix(vec3(0.30, 0.37, 0.18), vec3(0.42, 0.44, 0.24), smoothstep(0.5, 0.85, temp));
-  albedo = mix(albedo, field * (0.85 + 0.3 * mottle), vApT * 0.85 * (1.0 - snowAmt) * step(0.5, h));
+  albedo = mix(albedo, field * (0.85 + 0.3 * med), vApT * 0.85 * (1.0 - snowAmt) * step(0.5, h));
 
   albedo = mix(albedo, albedo * 0.62, uWetness * 0.7);
   // the palette above is authored in sRGB; lighting happens in linear space
@@ -288,6 +293,7 @@ export class Terrain {
       fragmentShader: FRAG,
       uniforms: {},
       side: THREE.FrontSide,
+      extensions: { derivatives: true },   // the fragment shader recovers normals
     });
 
     for (let l = 0; l < LEVELS; l++) {
