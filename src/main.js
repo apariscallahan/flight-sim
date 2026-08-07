@@ -230,8 +230,12 @@ weather.setMode(ui.weather);
 // ---------------------------------------------------------------------------
 // Sizing
 // ---------------------------------------------------------------------------
+let lastW = 0, lastH = 0;
 function resize() {
-  const w = window.innerWidth, h = window.innerHeight;
+  // Guard against being laid out at zero size (page opened in a hidden tab);
+  // the frame loop re-checks and calls back in once the viewport is real.
+  const w = Math.max(window.innerWidth, 1), h = Math.max(window.innerHeight, 1);
+  lastW = w; lastH = h;
   const dpr = Math.min(window.devicePixelRatio || 1, 2) * ui.scale;
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
@@ -402,6 +406,7 @@ function frame() {
 }
 
 function tick(dt) {
+  if (window.innerWidth !== lastW || window.innerHeight !== lastH) resize();
   frames++; fpsT += dt;
   if (fpsT > 0.5) { fps = frames / fpsT; frames = 0; fpsT = 0; }
 

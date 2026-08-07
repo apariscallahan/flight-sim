@@ -15,6 +15,8 @@ npm start
 Then open <http://localhost:5173>. A server is required (ES modules and the
 Three.js import map will not load over `file://`).
 
+Screenshots of what it looks like are in `screenshots/`.
+
 ## The aircraft
 
 A 737-800 class twinjet, modelled with a full six-degree-of-freedom rigid body:

@@ -17,7 +17,11 @@ function buildGrid(withHole) {
     for (let i = 0; i <= G; i++) verts.push(i - half, 0, j - half);
   }
   const idx = [];
-  const q0 = G / 4, q1 = (3 * G) / 4;      // hole spans the central half
+  // The hole nominally spans the central half — exactly the area the next finer
+  // ring covers. Each ring snaps its centre to its own grid though, so the two
+  // can be offset by up to 2 cells of this ring. Shrinking the hole by 3 cells
+  // per side guarantees the rings always overlap instead of leaving a gap.
+  const q0 = G / 4 + 3, q1 = (3 * G) / 4 - 3;
   for (let j = 0; j < G; j++) {
     for (let i = 0; i < G; i++) {
       if (withHole && i >= q0 && i < q1 && j >= q0 && j < q1) continue;
@@ -46,6 +50,7 @@ uniform vec2  uCenter;
 uniform float uMaxFreq;
 uniform float uGridHalf;
 uniform float uMorphStart;
+uniform float uLevelBias;
 uniform vec3  uCamPos;
 
 varying vec3 vWorld;
@@ -79,12 +84,20 @@ void main(){
   vec2 parity = fract(grid * 0.5) * 2.0;
   world -= parity * uSpacing * k;
 
-  float e = max(uSpacing, 1.0);
-  float h  = terrainHeight(world, uMaxFreq);
-  float hx = terrainHeight(world + vec2(e, 0.0), uMaxFreq);
-  float hz = terrainHeight(world + vec2(0.0, e), uMaxFreq);
+  // Detail cutoff is a function of world distance, not of which ring we are in.
+  // Neighbouring rings therefore agree exactly where they meet, so the morphed
+  // boundary vertices land on identical heights and no cracks open up.
+  float camDist = distance(world, uCamPos.xz);
+  float mf = min(1.0 / (0.05 * camDist + 6.0), uMaxFreq);
 
-  vWorld = vec3(world.x, h, world.y);
+  float e = max(uSpacing, 1.0);
+  float h  = terrainHeight(world, mf);
+  float hx = terrainHeight(world + vec2(e, 0.0), mf);
+  float hz = terrainHeight(world + vec2(0.0, e), mf);
+
+  // Coarser rings sit fractionally lower so the finer ring always wins in the
+  // overlap band. Sub-metre at ring scale, invisible at the distances involved.
+  vWorld = vec3(world.x, h - uLevelBias, world.y);
   vNormal = normalize(vec3(h - hx, e, h - hz));
   vClimate = climate(world);
   vApT = airportInfluence(world);
@@ -200,8 +213,10 @@ void main(){
 
   // rock on steep slopes
   float rockAmt = smoothstep(0.16, 0.42, slope);
-  vec3 rock = mix(C_ROCK, C_ROCK2, fbmW(vWorld.xz, 0.013, 3, 1e9) * 0.5 + 0.5);
-  rock *= 0.8 + 0.4 * (fbmW(vWorld.xz + 99.0, 0.11, 2, 1e9) * 0.5 + 0.5);
+  // fold height into the sample coordinate so cliff faces don't smear vertically
+  vec2 rockP = vec2(vWorld.x + vWorld.y * 0.85, vWorld.z - vWorld.y * 0.85);
+  vec3 rock = mix(C_ROCK, C_ROCK2, fbmW(rockP, 0.013, 3, 1e9) * 0.5 + 0.5);
+  rock *= 0.8 + 0.4 * (fbmW(rockP + 99.0, 0.11, 2, 1e9) * 0.5 + 0.5);
   albedo = mix(albedo, rock, rockAmt);
 
   // beaches
@@ -283,9 +298,10 @@ export class Terrain {
         uApCount: { value: 0 },
         uSpacing: { value: spacing },
         uCenter: { value: new THREE.Vector2() },
-        uMaxFreq: { value: 1.0 / (3.0 * spacing) },
+        uMaxFreq: { value: 1.0 / (2.6 * spacing) },
         uGridHalf: { value: G / 2 },
         uMorphStart: { value: MORPH_START },
+        uLevelBias: { value: l * 0.35 },
       });
       const mesh = new THREE.Mesh(l === 0 ? solid : ring, mat);
       mesh.frustumCulled = false;

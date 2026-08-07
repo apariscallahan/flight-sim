@@ -19,17 +19,6 @@ const TYPES = {
 };
 
 http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url.startsWith('/__shot')) {
-    let body = '';
-    req.on('data', c => { body += c; });
-    req.on('end', () => {
-      const name = (new URL(req.url, 'http://x').searchParams.get('name') || 'shot') + '.png';
-      const b64 = body.replace(/^data:image\/png;base64,/, '');
-      fs.writeFileSync(path.join(ROOT, 'shots', name), Buffer.from(b64, 'base64'));
-      res.writeHead(200).end('ok');
-    });
-    return;
-  }
   let urlPath = decodeURIComponent(req.url.split('?')[0]);
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.join(ROOT, path.normalize(urlPath).replace(/^(\.\.[/\\])+/, ''));

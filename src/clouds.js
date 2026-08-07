@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLSL_NOISE } from './noise.js';
+import { GLSL_TERRAIN, MAX_AIRPORTS } from './terrainCommon.js';
 import { GLSL_ATMO, atmo } from './atmosphere.js';
 
 // A stack of slabs through the cloud layer. The weight controls how much of the
@@ -22,6 +23,8 @@ function cumulusMaterial(slab) {
       uSlabY: { value: slab.y },
       uWind: { value: new THREE.Vector2(6, 2) },
       uDarken: { value: 0.0 },
+      uApData: { value: Array.from({ length: MAX_AIRPORTS }, () => new THREE.Vector4()) },
+      uApCount: { value: 0 },
     }),
     transparent: true,
     depthWrite: false,
@@ -41,6 +44,7 @@ function cumulusMaterial(slab) {
       #include <common>
       #include <logdepthbuf_pars_fragment>
       ${GLSL_NOISE}
+      ${GLSL_TERRAIN}
       ${GLSL_ATMO}
       uniform float uCoverage, uSlabW, uSlabO, uSlabY, uDarken;
       uniform vec2 uWind;
@@ -89,6 +93,11 @@ function cumulusMaterial(slab) {
         alpha *= 1.0 - smoothstep(60000.0, 105000.0, dist);
         // a flat slab seen edge-on becomes a hard streak — fade those out
         alpha *= smoothstep(0.015, 0.16, abs(V.y));
+        // and dissolve the slab where it would slice through a mountain
+        if (dist < 45000.0) {
+          float ground = terrainBase(vWorld.xz, 0.0006);
+          alpha *= smoothstep(-120.0, 420.0, uSlabY - ground);
+        }
         col = mix(col, sampleSky(V), clamp(fogAmount(vWorld) * 0.9, 0.0, 1.0));
         gl_FragColor = vec4(col, alpha);
       }`,

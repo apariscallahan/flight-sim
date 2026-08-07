@@ -43,13 +43,17 @@ float terrainBase(vec2 p, float maxFreq){
   float mm = fbmW(p + vec2(-4100.0, 2600.0), 0.0000480, 4, 1e9);
   float mountain = smoothstep(0.00, 0.46, mm) * land;
 
-  // Ridged multifractal for the peaks
-  float r = 0.0, a = 0.5, f = 0.00030;
+  // Ridged multifractal: each octave is gated by the one above it, so detail
+  // gathers along ridgelines and the flanks and valleys stay smooth.
+  float r = 0.0, a = 0.5, f = 0.00030, w = 1.0;
   for (int i = 0; i < 7; i++){
     if (f > maxFreq) break;
-    r += a * ridgeN(snoise(p * f + vec2(17.3, -9.1)));
-    f *= 2.07; a *= 0.5;
+    float n = ridgeN(snoise(p * f + vec2(17.3, -9.1))) * w;
+    w = clamp(n * 2.4, 0.0, 1.0);
+    r += a * n;
+    f *= 2.07; a *= 0.52;
   }
+  r *= 1.35;
   float h = base + mountain * r * 2900.0;
 
   // Rolling hills + valleys
@@ -112,12 +116,15 @@ export function terrainBase(x, z, maxFreq = 1e9) {
   const mm = fbmW(x - 4100, z + 2600, 0.0000480, 4, 1e9);
   const mountain = smoothstep(0.0, 0.46, mm) * land;
 
-  let r = 0, a = 0.5, f = 0.00030;
+  let r = 0, a = 0.5, f = 0.00030, w = 1;
   for (let i = 0; i < 7; i++) {
     if (f > maxFreq) break;
-    r += a * ridgeN(snoise(x * f + 17.3, z * f - 9.1));
-    f *= 2.07; a *= 0.5;
+    const n = ridgeN(snoise(x * f + 17.3, z * f - 9.1)) * w;
+    w = clamp(n * 2.4, 0, 1);
+    r += a * n;
+    f *= 2.07; a *= 0.52;
   }
+  r *= 1.35;
   let h = base + mountain * r * 2900;
   h += land * fbmW(x + 88, z + 33, 0.00105, 5, maxFreq) * 62;
   h += land * fbmW(x - 500, z + 900, 0.00850, 4, maxFreq) * 7;
