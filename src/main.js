@@ -15,9 +15,15 @@ import { AirportManager, airportsNear, lightUniforms } from './airports.js';
 import { setAirportUniformData, terrainHeight, climate, clamp, smoothstep } from './terrainCommon.js';
 import { Aircraft, KT, FT } from './aircraft.js';
 import { build737, animate737 } from './plane737.js';
-import { buildCockpit, updateCockpit, EYE } from './cockpit.js';
+import {
+  buildCockpit, updateCockpit, EYE, SEATS,
+  makeEngineCanvas, drawEngineDisplay, makeCduCanvas, drawCdu, makeMcpCanvas, drawMcp,
+} from './cockpit.js';
 import { PFD } from './hud.js';
 import { Minimap } from './minimap.js';
+import { TerrainMap } from './terrainMap.js';
+import { Navigation } from './navigation.js';
+import { ND } from './nd.js';
 import { Controls, HELP_ROWS } from './controls.js';
 import { Audio } from './audio.js';
 
@@ -75,9 +81,18 @@ const ac = new Aircraft();
 const model = build737();
 scene.add(model);
 
+const terrainMap = new TerrainMap(112);
+const nav = new Navigation();
 const pfd = new PFD(document.getElementById('pfdCanvas'));
-const minimap = new Minimap(document.getElementById('mapCanvas'));
-const cockpit = buildCockpit(pfd.cv, minimap.cv);
+const minimap = new Minimap(document.getElementById('mapCanvas'), terrainMap);
+const nd = new ND(document.getElementById('ndCanvas'), terrainMap);
+const engineCv = makeEngineCanvas();
+const cduCv = makeCduCanvas();
+const mcpCv = makeMcpCanvas();
+drawMcp(mcpCv, ac);
+const cockpit = buildCockpit({
+  pfd: pfd.cv, nd: nd.cv, engine: engineCv, cdu: cduCv, mcp: mcpCv,
+});
 model.add(cockpit);
 
 // projected aircraft shadow
@@ -128,6 +143,7 @@ const camFollow = { pos: new THREE.Vector3(), first: true, look: new THREE.Vecto
 const ui = {
   hour: 7.6, rate: 30, weather: 'fair', cam: 0,
   bloom: true, veg: true, scale: 1, paused: false, invert: false,
+  cornerND: false, seat: 'captain',
 };
 
 // ---------------------------------------------------------------------------
@@ -215,7 +231,32 @@ const actions = {
   setCamera(i) { if (i >= 0 && i < 4) setCam(i); },
   toggleHelp() { el('help').classList.toggle('show'); },
   togglePause() { ui.paused = !ui.paused; toast(ui.paused ? 'Paused' : 'Resumed'); },
-  mapRange(d) { minimap.cycleRange(d); toast('Map range ' + [5, 10, 20, 40, 80, 160][minimap.rangeIdx] + ' NM'); },
+  mapRange(d) {
+    minimap.cycleRange(d);
+    nd.rangeIdx = minimap.rangeIdx;
+    toast('Range ' + [5, 10, 20, 40, 80, 160][minimap.rangeIdx] + ' NM');
+  },
+  cycleApproach(d) {
+    nav.cycle(ac, d);
+    toast(nav.tuned ? 'Tuned ' + nav.tuned.airport.name + ' ILS ' + nav.tuned.runway
+      : 'No approach in range');
+  },
+  toggleCornerDisplay() {
+    ui.cornerND = !ui.cornerND;
+    el('map').style.display = ui.cornerND ? 'none' : 'block';
+    el('ndWrap').style.display = ui.cornerND ? 'block' : 'none';
+    toast(ui.cornerND ? 'Corner: navigation display' : 'Corner: moving map');
+  },
+  toggleTerrainOverlay() {
+    nd.showTerrain = !nd.showTerrain;
+    toast('ND terrain ' + (nd.showTerrain ? 'ON' : 'OFF'));
+  },
+  cycleSeat() {
+    const order = ['captain', 'centre', 'firstOfficer'];
+    ui.seat = order[(order.indexOf(ui.seat) + 1) % order.length];
+    EYE.x = SEATS[ui.seat];
+    toast('Seat: ' + (ui.seat === 'firstOfficer' ? 'first officer' : ui.seat));
+  },
   resetRunway() { const a = nearestAirport(); if (a) { ac.placeOnRunway(a); toast('Positioned at ' + a.name); } },
   resetApproach() { const a = nearestAirport(); if (a) { ac.placeAirborne(a, 9, 3000); toast('On final for ' + a.name); } },
   ap(which) {
@@ -313,6 +354,7 @@ function resize() {
   const hudDpr = Math.min(window.devicePixelRatio || 1, 2);
   pfd.resize(hudDpr);
   minimap.resize(hudDpr);
+  nd.resize(hudDpr);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -345,7 +387,7 @@ let last = performance.now() / 1000;
 let simTime = 0;
 let fps = 60, frames = 0, fpsT = 0;
 let shakePhase = 0;
-let hudClock = 0, mapClock = 0;
+let hudClock = 0, mapClock = 0, slowClock = 0;
 let started = false;
 
 const dayAmb = new THREE.Color(0.30, 0.46, 0.86);
@@ -425,8 +467,10 @@ function updateCamera(dt) {
     camera.position.copy(eye);
     camera.quaternion.copy(ac.quat);
     camera.rotateY(look.lookX * 1.6);
-    camera.rotateX(look.lookY * 0.9);
-    camera.fov = 70;
+    // A pilot's resting scan is slightly down: over the glareshield and across
+    // the instrument panel, not level with the horizon.
+    camera.rotateX(look.lookY * 0.9 - 0.12);
+    camera.fov = 76;
   } else if (ui.cam === 1) {
     const dist = 46, height = 11;
     const off = new THREE.Vector3(
@@ -529,8 +573,9 @@ function tick(dt) {
   mapClock += dt;
   const mapTick = mapClock >= 1 / 10;
   if (mapTick) mapClock = 0;
-
-  if (ui.cam === 0) updateCockpit(cockpit, ac, renderer.toneMappingExposure, hudTick || mapTick);
+  slowClock += dt;
+  const slowTick = slowClock >= 1 / 4;
+  if (slowTick) slowClock = 0;
 
   updateCamera(dt);
   atmo.uCamPos.value.copy(camera.position);
@@ -566,10 +611,22 @@ function tick(dt) {
     shadow.material.opacity = 0.55 * clamp(1 - ac.agl / 600, 0, 1) * clamp(sunDir.y * 3, 0, 1) * (1 - p.coverage * 0.7);
   } else shadow.visible = false;
 
-  // HUD
-  if (hudTick) pfd.draw(ac, { fps });
+  // Navigation and instruments. Each display runs on its own clock, and only
+  // the ones actually redrawn get re-uploaded to the cockpit screens.
+  nav.update(ac);
+  const dirty = new Set();
+  if (hudTick) { pfd.draw(ac, { fps }, nav); dirty.add(pfd.cv); }
   minimap.tick(ac.pos.x, ac.pos.z);
-  if (mapTick) minimap.draw(ac);
+  if (mapTick) {
+    if (ui.cornerND || ui.cam === 0) { nd.draw(ac, nav); dirty.add(nd.cv); }
+    if (!ui.cornerND) minimap.draw(ac);
+    if (ui.cam === 0) { drawEngineDisplay(engineCv, ac); dirty.add(engineCv); }
+  }
+  if (slowTick && ui.cam === 0) {
+    drawCdu(cduCv, ac, nav); dirty.add(cduCv);
+    drawMcp(mcpCv, ac); cockpit.userData.mcpTex.needsUpdate = true;
+  }
+  if (ui.cam === 0) updateCockpit(cockpit, ac, renderer.toneMappingExposure, dirty);
 
   audio.update(ac, p, dt, ui.cam === 0);
 
@@ -599,7 +656,7 @@ window.addEventListener('pointerdown', () => audio.start(), { once: true });
 window.addEventListener('keydown', () => audio.start(), { once: true });
 
 // Debug handle (also handy from the browser console).
-window.SIM = { ac, ui, actions, controls, renderer, scene, camera, terrain, weather, minimap, vegetation, clouds, quality, tick, setCam, airportsNear };
+window.SIM = { ac, ui, actions, controls, renderer, scene, camera, terrain, weather, minimap, nd, nav, vegetation, clouds, quality, tick, setCam, airportsNear };
 
 el('loadMsg').textContent = 'compiling shaders…';
 requestAnimationFrame(frame);

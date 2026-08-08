@@ -55,6 +55,34 @@ Check the PFD: a red **PARK BRK** flag at the top right, or `BRAKES: PARK` in
 the bottom strip, means the parking brake is set. Press **V** to release it.
 The engines cannot overcome it.
 
+### Flying an instrument approach
+
+Every runway has an ILS on both landing directions, and the sim tunes the one
+you are best set up for automatically — press **T** to cycle through the others
+in range. The tuned approach shows up in three places:
+
+- **On the PFD**, a magenta diamond below the attitude indicator is the
+  localiser and one down its right edge is the glideslope. They show where the
+  beam is relative to you, so you steer *towards* the diamond: needle left means
+  fly left. Both are centred when you are on profile.
+- **On the navigation display**, the approach is drawn as a magenta dashed
+  centreline running back from the threshold, with a tick every 2 NM.
+- **On the CDU**, in the centre of the panel, as runway, course, distance and
+  the current localiser and glideslope errors in degrees.
+
+A normal approach: intercept the centreline about 10 NM out at around 2000 ft
+above the field, gear down, flaps 30, and hold roughly 145 kt. Keep both
+diamonds centred and you will arrive at the threshold at 50 ft.
+
+### The navigation display
+
+The ND is track-up in arc mode. It shows terrain shaded the way a real terrain
+awareness system does — red is at or above your altitude, amber is within about
+3000 ft below, green is below that — plus airports with their runways drawn to
+scale, your ground track, the wind, and the tuned approach. **Z** and **X**
+change the range; **J** toggles the terrain shading; **N** swaps the corner
+display between the moving map and the ND.
+
 ### Landing
 
 Press **Backspace** to be placed on a 9 NM final. Then: gear down (`G`), flaps
@@ -134,6 +162,25 @@ level. Each one gets procedurally drawn asphalt with markings and threshold
 numbers derived from its heading, a taxiway, apron, terminal, control tower,
 hangars, and a full lighting set (edge, threshold, PAPI, approach, taxiway).
 
+## The flight deck
+
+The cockpit is the intended way to fly this. It follows the real layout:
+
+- **Six windows** — two forward windshields split by a centre post, two angled
+  side windows, and aft quarter lights.
+- **Glareshield** carrying the mode control panel, with course, speed, heading,
+  altitude and vertical speed windows that track the autopilot, plus EFIS
+  control panels and master caution lights either side.
+- **Main panel** with six live screens: a PFD and ND for each pilot, an engine
+  display showing N1, EGT and N2 per engine, and the CDU.
+- **Centre pedestal** with the thrust levers, speedbrake and flap levers,
+  trim wheels that turn with the stabiliser, parking brake, and radio panels.
+- **Overhead panel**, side consoles, yokes that move with the controls, and
+  rudder pedals.
+
+You sit in the captain's seat by default. **K** moves you to the centre or the
+right seat.
+
 ## Graphics
 
 - **Atmosphere** — Rayleigh + Mie single scattering ray-marched into a small
@@ -172,7 +219,11 @@ for the full list.
 | Camera | `C`, or `5`–`8` for cockpit / chase / wing / orbit |
 | Look around | drag with the mouse |
 | Mouse as yoke | `M` |
-| Map range | `Z` / `X` |
+| Seat | `K` — captain · centre · first officer |
+| Range | `Z` / `X` — map and nav display |
+| Tune next approach | `T` |
+| Corner display | `N` — moving map or nav display |
+| ND terrain shading | `J` |
 | Graphics preset | the panel on the right (defaults to Auto) |
 | Reposition | `Enter` on a runway · `Backspace` on approach |
 | Pause · help | `P` · `H` |
@@ -199,8 +250,11 @@ src/
   airports.js       site selection, runway/lighting/building generation
   aircraft.js       6-DOF flight model, gear, engines, autopilot
   plane737.js       procedural airframe and livery
-  cockpit.js        flight deck interior
+  cockpit.js        flight deck: geometry, panel artwork, live screens
   hud.js            primary flight display
+  navigation.js     ILS approaches, tuning, deviations
+  nd.js             navigation display (arc mode, terrain awareness)
+  terrainMap.js     CPU terrain sampling shared by the map and the ND
   minimap.js        moving map
   controls.js       keyboard / mouse / gamepad
   audio.js          synthesised engine, wind, rain

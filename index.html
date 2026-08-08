@@ -19,12 +19,16 @@
     font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
     user-select: none;
   }
-  #view { position: fixed; inset: 0; display: block; }
+  /* A canvas is a replaced element: `inset: 0` alone leaves it at its intrinsic
+     attribute size, which is the render resolution. It must be stretched
+     explicitly or a reduced render scale shrinks the visible picture too. */
+  #view { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: block; }
 
   .hud { position: fixed; pointer-events: none; z-index: 10; }
   #pfd { left: 18px; bottom: 16px; }
   #map { right: 18px; bottom: 16px; }
-  #pfd canvas, #map canvas { display: block; filter: drop-shadow(0 6px 22px rgba(0,0,0,0.55)); }
+  #ndWrap { right: 18px; bottom: 16px; display: none; }
+  #pfd canvas, #map canvas, #ndWrap canvas { display: block; filter: drop-shadow(0 6px 22px rgba(0,0,0,0.55)); }
 
   #topbar {
     position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 12;
@@ -133,6 +137,7 @@
 
 <div class="hud" id="pfd"><canvas id="pfdCanvas"></canvas></div>
 <div class="hud" id="map"><canvas id="mapCanvas"></canvas></div>
+<div class="hud" id="ndWrap"><canvas id="ndCanvas"></canvas></div>
 
 <div id="panel">
   <h3>Environment</h3>

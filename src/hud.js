@@ -22,7 +22,7 @@ export class PFD {
     this.dpr = dpr;
   }
 
-  draw(ac, info) {
+  draw(ac, info, nav) {
     const g = this.ctx, W = this.W, H = this.H;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     g.clearRect(0, 0, W, H);
@@ -33,12 +33,52 @@ export class PFD {
     roundRect(g, 0.5, 0.5, W - 1, H - 1, 10); g.stroke();
 
     this.attitude(g, ac, 260, 168, 108);
+    this.ils(g, ac, nav, 260, 168, 108);
     this.speedTape(g, ac, 62, 168, 46, 240);
     this.altTape(g, ac, 400, 168, 62, 240);
     this.vsi(g, ac, 476, 168, 22, 240);
     this.headingTape(g, ac, 260, 324, 260);
-    this.modes(g, ac, info);
+    this.modes(g, ac, info, nav);
     this.bottom(g, ac, info);
+  }
+
+  /** Localiser and glideslope deviation, the way you actually fly an approach. */
+  ils(g, ac, nav, cx, cy, r) {
+    if (!nav || !nav.tuned || !nav.dev || !nav.dev.inRange) return;
+    const d = nav.dev;
+
+    // localiser: scale under the attitude indicator
+    const ly = cy + r * 0.94 + 13;
+    g.strokeStyle = 'rgba(200,215,225,0.7)'; g.lineWidth = 1.2;
+    for (let i = -2; i <= 2; i++) {
+      if (i === 0) continue;
+      g.beginPath(); g.arc(cx + i * r * 0.40, ly, 3.2, 0, 7); g.stroke();
+    }
+    g.beginPath(); g.moveTo(cx, ly - 7); g.lineTo(cx, ly + 7); g.stroke();
+    // The needle shows where the beam is relative to the aircraft, so you steer
+    // towards it: right of the localiser puts the needle left.
+    g.fillStyle = MAG;
+    const lx = cx - Math.max(-1, Math.min(1, d.loc)) * r * 0.80;
+    g.beginPath();
+    g.moveTo(lx, ly - 7); g.lineTo(lx + 7, ly); g.lineTo(lx, ly + 7); g.lineTo(lx - 7, ly);
+    g.closePath(); g.fill();
+
+    // glideslope: scale down the right edge of the attitude indicator
+    if (d.gsValid) {
+      const gx = cx + r - 9;
+      g.strokeStyle = 'rgba(200,215,225,0.7)'; g.lineWidth = 1.2;
+      for (let i = -2; i <= 2; i++) {
+        if (i === 0) continue;
+        g.beginPath(); g.arc(gx, cy + i * r * 0.40, 3.2, 0, 7); g.stroke();
+      }
+      g.beginPath(); g.moveTo(gx - 7, cy); g.lineTo(gx + 7, cy); g.stroke();
+      g.fillStyle = MAG;
+      const gy = cy + Math.max(-1, Math.min(1, d.gs)) * r * 0.80;
+      g.beginPath();
+      g.moveTo(gx, gy - 7); g.lineTo(gx + 7, gy); g.lineTo(gx, gy + 7); g.lineTo(gx - 7, gy);
+      g.closePath(); g.fill();
+    }
+
   }
 
   // --- attitude director ----------------------------------------------------
@@ -157,6 +197,23 @@ export class PFD {
     const vmo = 340;
     g.fillStyle = 'rgba(255,60,48,0.75)';
     g.fillRect(cx + w / 2 - 5, cy - h / 2, 5, (kt - vmo) * ppk + h / 2);
+
+    // speed bugs: rotate and V2 on the ground, Vref in the approach configuration
+    const bug = (v, label, col) => {
+      const y = cy + (kt - v) * ppk;
+      g.fillStyle = col;
+      g.fillRect(cx - w / 2 - 6, y - 1.5, 8, 3);
+      g.font = '9px "Consolas", monospace'; g.textAlign = 'right'; g.textBaseline = 'middle';
+      g.fillText(label, cx - w / 2 - 8, y);
+    };
+    if (ac.onGround || ac.ias < 5) {
+      bug(vs * 1.13, 'VR', '#31ff6a');
+      bug(vs * 1.22, 'V2', '#31ff6a');
+    } else if (ac.flapIndex >= 5) {
+      bug(vs * 1.30, 'REF', '#31ff6a');
+    }
+    // autothrottle selected speed
+    if (ac.ap.on && ac.ap.spdHold) bug(ac.ap.spd, 'SEL', MAG);
     g.restore();
 
     g.strokeStyle = 'rgba(150,180,200,0.45)'; g.lineWidth = 1;
@@ -197,6 +254,16 @@ export class PFD {
     g.fillRect(cx - w / 2, gy, w, h);
     g.strokeStyle = AMB; g.lineWidth = 2;
     g.beginPath(); g.moveTo(cx - w / 2, gy); g.lineTo(cx + w / 2, gy); g.stroke();
+
+    // selected altitude bug
+    if (ac.ap.altHold) {
+      const by = cy + (ft - ac.ap.alt / FT) * ppf;
+      g.fillStyle = MAG;
+      g.beginPath();
+      g.moveTo(cx - w / 2, by - 7); g.lineTo(cx - w / 2 + 9, by - 7);
+      g.lineTo(cx - w / 2 + 9, by + 7); g.lineTo(cx - w / 2, by + 7);
+      g.lineTo(cx - w / 2 + 4, by); g.closePath(); g.fill();
+    }
     g.restore();
 
     g.strokeStyle = 'rgba(150,180,200,0.45)'; g.lineWidth = 1;
@@ -278,7 +345,13 @@ export class PFD {
     g.fillText(String(Math.round(hdg)).padStart(3, '0'), cx, cy - h / 2 - 9);
   }
 
-  modes(g, ac, info) {
+  modes(g, ac, info, nav) {
+    if (nav && nav.tuned) {
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = MAG; g.font = 'bold 11px "Consolas", monospace';
+      const dme = nav.dev ? `  ${(nav.dev.dme / 1852).toFixed(1)}NM` : '';
+      g.fillText(`${nav.tuned.airport.name} ILS ${nav.tuned.runway}  CRS ${String(Math.round(nav.tuned.courseDeg)).padStart(3, '0')}${dme}`, 260, 34);
+    }
     g.textAlign = 'left'; g.textBaseline = 'middle';
     g.font = 'bold 11px "Segoe UI", sans-serif';
     const A = ac.ap;

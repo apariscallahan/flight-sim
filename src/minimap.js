@@ -1,29 +1,23 @@
-import { terrainHeight, climate, RWY_LENGTH } from './terrainCommon.js';
+import { RWY_LENGTH } from './terrainCommon.js';
 import { airportsNear } from './airports.js';
 
 const NM = 1852;
 export const RANGES = [5, 10, 20, 40, 80, 160];
-const N = 112;                       // terrain samples per side
 
 export class Minimap {
-  constructor(canvas) {
+  constructor(canvas, terrainMap) {
     this.cv = canvas;
     this.ctx = canvas.getContext('2d');
     this.size = 280;
     this.rangeIdx = 2;
-
-    this.map = document.createElement('canvas');
-    this.map.width = this.map.height = N;
-    this.mapCtx = this.map.getContext('2d');
-    this.img = this.mapCtx.createImageData(N, N);
-    this.heights = new Float32Array((N + 1) * (N + 1));
-
-    this.job = null;
-    this.ready = false;
-    this.origin = { x: 0, z: 0, half: 0 };
+    this.tmap = terrainMap;          // sampling is shared with the nav display
     this._airports = [];
     this._apAt = { x: 1e9, z: 1e9 };
   }
+
+  get ready() { return this.tmap.ready; }
+  get origin() { return this.tmap.origin; }
+  get map() { return this.tmap.map; }
 
   resize(dpr) {
     this.cv.width = this.size * dpr;
@@ -36,75 +30,17 @@ export class Minimap {
 
   cycleRange(dir) {
     this.rangeIdx = (this.rangeIdx + dir + RANGES.length) % RANGES.length;
-    this.job = null; this.ready = false;
   }
 
   get halfExtent() { return RANGES[this.rangeIdx] * NM; }
 
-  /** Progressive terrain sampling — a slice per frame keeps the frame rate flat. */
   tick(px, pz) {
-    const half = this.halfExtent;
-    const moved = Math.hypot(px - this.origin.x, pz - this.origin.z);
-    if (!this.job && (moved > half * 0.10 || half !== this.origin.half || !this.ready)) {
-      this.job = { x: px, z: pz, half, row: 0 };
-    }
-    if (this.job) {
-      const j = this.job;
-      const rows = Math.min(N + 1 - j.row, 6);
-      const step = (j.half * 2) / N;
-      for (let r = 0; r < rows; r++) {
-        const zz = j.z - j.half + (j.row + r) * step;
-        for (let i = 0; i <= N; i++) {
-          const xx = j.x - j.half + i * step;
-          this.heights[(j.row + r) * (N + 1) + i] = terrainHeight(xx, zz, 1 / (step * 2));
-        }
-      }
-      j.row += rows;
-      if (j.row > N) {
-        this.colorize(j);
-        this.origin = { x: j.x, z: j.z, half: j.half };
-        this.ready = true;
-        this.job = null;
-      }
-    }
+    this.tmap.setHalfExtent(this.halfExtent);
+    this.tmap.tick(px, pz);
     if (Math.hypot(px - this._apAt.x, pz - this._apAt.z) > 4000) {
       this._apAt = { x: px, z: pz };
-      this._airports = airportsNear(px, pz, Math.max(half * 1.5, 60000), 40);
+      this._airports = airportsNear(px, pz, Math.max(this.halfExtent * 1.5, 60000), 40);
     }
-  }
-
-  colorize(j) {
-    const d = this.img.data;
-    const step = (j.half * 2) / N;
-    for (let r = 0; r < N; r++) {
-      for (let i = 0; i < N; i++) {
-        const h = this.heights[r * (N + 1) + i];
-        const hx = this.heights[r * (N + 1) + i + 1];
-        const hz = this.heights[(r + 1) * (N + 1) + i];
-        const o = (r * N + i) * 4;
-        let R, G, B;
-        if (h < 0) {
-          const t = Math.min(-h / 900, 1);
-          R = 12 + 26 * (1 - t); G = 46 + 76 * (1 - t); B = 92 + 78 * (1 - t);
-        } else {
-          const cl = climate(j.x - j.half + i * step, j.z - j.half + r * step);
-          const warm = smooth(0.56, 0.82, cl.t), cold = 1 - smooth(0.18, 0.46, cl.t);
-          const wet = smooth(0.22, 0.66, cl.m);
-          R = 96 + warm * 80 - wet * 44 + cold * 24;
-          G = 112 + wet * 22 - warm * 22 + cold * 20;
-          B = 68 - wet * 20 + cold * 40 + warm * 6;
-          const alt = Math.min(h / 2600, 1);
-          R += alt * 90; G += alt * 88; B += alt * 96;
-          if (h < 12) { R = R * 0.5 + 118; G = G * 0.5 + 108; B = B * 0.5 + 74; }
-          // hillshade with the sun in the north-west
-          const sl = (h - hx) + (h - hz);
-          const sh = Math.max(0.58, Math.min(1.42, 1 + sl / (step * 2.4)));
-          R *= sh; G *= sh; B *= sh;
-        }
-        d[o] = clamp255(R); d[o + 1] = clamp255(G); d[o + 2] = clamp255(B); d[o + 3] = 255;
-      }
-    }
-    this.mapCtx.putImageData(this.img, 0, 0);
   }
 
   draw(ac) {
@@ -120,7 +56,6 @@ export class Minimap {
 
     // terrain, offset so the aircraft stays centred between rebuilds
     if (this.ready) {
-      const scale = S / (half * 2) * (this.origin.half * 2 / (this.origin.half * 2));
       const pxPerM = S / (half * 2);
       const w = this.origin.half * 2 * pxPerM;
       const ox = C + (this.origin.x - ac.pos.x) * pxPerM - w / 2;
@@ -226,5 +161,3 @@ export class Minimap {
   }
 }
 
-function smooth(a, b, x) { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
-function clamp255(v) { return v < 0 ? 0 : v > 255 ? 255 : v | 0; }

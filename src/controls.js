@@ -14,6 +14,7 @@ export class Controls {
 
     const tapped = new Set([
       'KeyG', 'KeyV', 'KeyC', 'KeyH', 'KeyM', 'KeyZ', 'KeyX', 'KeyP',
+      'KeyT', 'KeyN', 'KeyJ', 'KeyK',
       'BracketLeft', 'BracketRight', 'Space', 'Enter', 'Backspace',
       'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8',
     ]);
@@ -63,6 +64,10 @@ export class Controls {
       case 'KeyZ': A.mapRange(-1); break;
       case 'KeyX': A.mapRange(1); break;
       case 'KeyP': A.togglePause(); break;
+      case 'KeyT': A.cycleApproach(1); break;
+      case 'KeyN': A.toggleCornerDisplay(); break;
+      case 'KeyJ': A.toggleTerrainOverlay(); break;
+      case 'KeyK': A.cycleSeat(); break;
       case 'BracketLeft': A.flaps(-1); break;
       case 'BracketRight': A.flaps(1); break;
       case 'Space': A.toggleSpoilers(); break;
@@ -164,7 +169,11 @@ export const HELP_ROWS = [
   ['Camera', 'C or 5–8', 'cockpit · chase · wing · tower'],
   ['Look around', 'drag with the mouse', ''],
   ['Mouse yoke', 'M', ''],
-  ['Map range', 'Z / X', ''],
+  ['Range', 'Z / X', 'map and nav display'],
+  ['Tune next approach', 'T', 'cycles the ILS in range'],
+  ['Corner display', 'N', 'moving map or nav display'],
+  ['ND terrain', 'J', ''],
+  ['Change seat', 'K', 'captain · centre · first officer'],
   ['Reset on runway', 'Enter', ''],
   ['Reset on approach', 'Backspace', ''],
   ['Pause', 'P', ''],
